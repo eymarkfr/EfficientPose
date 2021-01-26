@@ -35,10 +35,9 @@ import string
 import collections
 import numpy as np
 
-from six.moves import xrange
-from keras_applications.imagenet_utils import _obtain_input_shape
-from keras_applications.imagenet_utils import decode_predictions
-from keras_applications.imagenet_utils import preprocess_input as _preprocess_input
+import tensorflow as tf
+from tensorflow.keras.applications.imagenet_utils import decode_predictions
+from tensorflow.keras.applications.imagenet_utils import preprocess_input as _preprocess_input
 
 from utils import get_submodules_from_kwargs
 from layers import BatchNormalization
@@ -203,10 +202,10 @@ def round_repeats(repeats, depth_coefficient):
     return int(math.ceil(depth_coefficient * repeats))
 
 
-def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', freeze_bn=False):
+def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', freeze_bn=False, lite=False):
     """Mobile Inverted Residual Bottleneck."""
 
-    has_se = (block_args.se_ratio is not None) and (0 < block_args.se_ratio <= 1)
+    has_se = not lite and ((block_args.se_ratio is not None) and (0 < block_args.se_ratio <= 1)) # see https://github.com/tensorflow/tpu/tree/master/models/official/efficientnet/lite
     bn_axis = 3 if backend.image_data_format() == 'channels_last' else 1
 
     # workaround over non working dropout with None in noise_shape in tf.keras
@@ -308,6 +307,7 @@ def EfficientNet(width_coefficient,
                  pooling=None,
                  classes=1000,
                  freeze_bn=False,
+                 lite=False,
                  **kwargs):
     """Instantiates the EfficientNet architecture using given scaling coefficients.
     Optionally loads weights pre-trained on ImageNet.
@@ -387,7 +387,7 @@ def EfficientNet(width_coefficient,
             img_input = input_tensor
 
     bn_axis = 3 if backend.image_data_format() == 'channels_last' else 1
-    activation = get_swish(**kwargs)
+    activation = get_swish(**kwargs) if not lite else tf.nn.relu6 # see https://github.com/tensorflow/tpu/tree/master/models/official/efficientnet/lite
 
     # Build stem
     x = img_input
@@ -419,7 +419,8 @@ def EfficientNet(width_coefficient,
                           activation=activation,
                           drop_rate=drop_rate,
                           prefix='block{}a_'.format(idx + 1),
-                          freeze_bn=freeze_bn
+                          freeze_bn=freeze_bn,
+                          lite=lite
                           )
         block_num += 1
         if block_args.num_repeat > 1:
@@ -427,7 +428,7 @@ def EfficientNet(width_coefficient,
             block_args = block_args._replace(
                 input_filters=block_args.output_filters, strides=[1, 1])
             # pylint: enable=protected-access
-            for bidx in xrange(block_args.num_repeat - 1):
+            for bidx in range(block_args.num_repeat - 1):
                 drop_rate = drop_connect_rate * float(block_num) / num_blocks_total
                 block_prefix = 'block{}{}_'.format(
                     idx + 1,
@@ -575,3 +576,98 @@ setattr(EfficientNetB4, '__doc__', EfficientNet.__doc__)
 setattr(EfficientNetB5, '__doc__', EfficientNet.__doc__)
 setattr(EfficientNetB6, '__doc__', EfficientNet.__doc__)
 setattr(EfficientNetB7, '__doc__', EfficientNet.__doc__)
+
+def _obtain_input_shape(input_shape,
+                        default_size,
+                        min_size,
+                        data_format,
+                        require_flatten,
+                        weights=None):
+    """Internal utility to compute/validate a model's input shape.
+    # Arguments
+        input_shape: Either None (will return the default network input shape),
+            or a user-provided shape to be validated.
+        default_size: Default input width/height for the model.
+        min_size: Minimum input width/height accepted by the model.
+        data_format: Image data format to use.
+        require_flatten: Whether the model is expected to
+            be linked to a classifier via a Flatten layer.
+        weights: One of `None` (random initialization)
+            or 'imagenet' (pre-training on ImageNet).
+            If weights='imagenet' input channels must be equal to 3.
+    # Returns
+        An integer shape tuple (may include None entries).
+    # Raises
+        ValueError: In case of invalid argument values.
+    """
+    if weights != 'imagenet' and input_shape and len(input_shape) == 3:
+        if data_format == 'channels_first':
+            if input_shape[0] not in {1, 3}:
+                warnings.warn(
+                    'This model usually expects 1 or 3 input channels. '
+                    'However, it was passed an input_shape with ' +
+                    str(input_shape[0]) + ' input channels.')
+            default_shape = (input_shape[0], default_size, default_size)
+        else:
+            if input_shape[-1] not in {1, 3}:
+                warnings.warn(
+                    'This model usually expects 1 or 3 input channels. '
+                    'However, it was passed an input_shape with ' +
+                    str(input_shape[-1]) + ' input channels.')
+            default_shape = (default_size, default_size, input_shape[-1])
+    else:
+        if data_format == 'channels_first':
+            default_shape = (3, default_size, default_size)
+        else:
+            default_shape = (default_size, default_size, 3)
+    if weights == 'imagenet' and require_flatten:
+        if input_shape is not None:
+            if input_shape != default_shape:
+                raise ValueError('When setting `include_top=True` '
+                                 'and loading `imagenet` weights, '
+                                 '`input_shape` should be ' +
+                                 str(default_shape) + '.')
+        return default_shape
+    if input_shape:
+        if data_format == 'channels_first':
+            if input_shape is not None:
+                if len(input_shape) != 3:
+                    raise ValueError(
+                        '`input_shape` must be a tuple of three integers.')
+                if input_shape[0] != 3 and weights == 'imagenet':
+                    raise ValueError('The input must have 3 channels; got '
+                                     '`input_shape=' + str(input_shape) + '`')
+                if ((input_shape[1] is not None and input_shape[1] < min_size) or
+                   (input_shape[2] is not None and input_shape[2] < min_size)):
+                    raise ValueError('Input size must be at least ' +
+                                     str(min_size) + 'x' + str(min_size) +
+                                     '; got `input_shape=' +
+                                     str(input_shape) + '`')
+        else:
+            if input_shape is not None:
+                if len(input_shape) != 3:
+                    raise ValueError(
+                        '`input_shape` must be a tuple of three integers.')
+                if input_shape[-1] != 3 and weights == 'imagenet':
+                    raise ValueError('The input must have 3 channels; got '
+                                     '`input_shape=' + str(input_shape) + '`')
+                if ((input_shape[0] is not None and input_shape[0] < min_size) or
+                   (input_shape[1] is not None and input_shape[1] < min_size)):
+                    raise ValueError('Input size must be at least ' +
+                                     str(min_size) + 'x' + str(min_size) +
+                                     '; got `input_shape=' +
+                                     str(input_shape) + '`')
+    else:
+        if require_flatten:
+            input_shape = default_shape
+        else:
+            if data_format == 'channels_first':
+                input_shape = (3, None, None)
+            else:
+                input_shape = (None, None, 3)
+    if require_flatten:
+        if None in input_shape:
+            raise ValueError('If `include_top` is True, '
+                             'you should specify a static `input_shape`. '
+                             'Got `input_shape=' + str(input_shape) + '`')
+    return input_shape

@@ -90,6 +90,7 @@ def parse_args(args):
     parser.add_argument('--compute-val-loss', help = 'Compute validation loss during training', dest = 'compute_val_loss', action = 'store_true')
     parser.add_argument('--score-threshold', help = 'score threshold for non max suppresion', type = float, default = 0.5)
     parser.add_argument('--validation-image-save-path', help = 'path where to save the predicted validation images after each epoch', default = None)
+    parser.add_argument('--lite', help='Wether or not to apply the "lite" modifications to the efficientnet backbone', default=False, action='store_true')
 
     # Fit generator arguments
     parser.add_argument('--multiprocessing', help = 'Use multiprocessing in fit_generator.', action = 'store_true')
@@ -134,7 +135,8 @@ def main(args = None):
                                                               num_anchors = num_anchors,
                                                               freeze_bn = not args.no_freeze_bn,
                                                               score_threshold = args.score_threshold,
-                                                              num_rotation_parameters = num_rotation_parameters)
+                                                              num_rotation_parameters = num_rotation_parameters,
+                                                              lite = args.lite)
     print("Done!")
     # load pretrained weights
     if args.weights:
@@ -201,9 +203,13 @@ def allow_gpu_growth_memory():
         Set allow growth GPU memory to true
 
     """
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-    _ = tf.Session(config = config)
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError as e:
+            print(e)
 
 
 def create_callbacks(training_model, prediction_model, validation_generator, args):
@@ -222,6 +228,7 @@ def create_callbacks(training_model, prediction_model, validation_generator, arg
     callbacks = []
 
     tensorboard_callback = None
+    tensorboard_dir = None
     
     if args.dataset_type == "linemod":
         snapshot_path = os.path.join(args.snapshot_path, "object_" + str(args.object_id))
@@ -261,7 +268,6 @@ def create_callbacks(training_model, prediction_model, validation_generator, arg
         tensorboard_callback = keras.callbacks.TensorBoard(
             log_dir = tensorboard_dir,
             histogram_freq = 0,
-            batch_size = args.batch_size,
             write_graph = True,
             write_grads = False,
             write_images = False,
@@ -280,7 +286,7 @@ def create_callbacks(training_model, prediction_model, validation_generator, arg
     if args.snapshots:
         # ensure directory created first; otherwise h5py will error after epoch.
         os.makedirs(snapshot_path, exist_ok = True)
-        checkpoint = keras.callbacks.ModelCheckpoint(os.path.join(snapshot_path, 'phi_{phi}_{dataset_type}_best_{metric}.h5'.format(phi = str(args.phi), metric = metric_to_monitor, dataset_type = args.dataset_type)),
+        checkpoint = keras.callbacks.ModelCheckpoint(os.path.join(snapshot_path, 'phi_{phi}_{dataset_type}{is_lite}_best_{metric}.h5'.format(phi = str(args.phi), is_lite = "_lite" if args.lite else "", metric = metric_to_monitor, dataset_type = args.dataset_type)),
                                                      verbose = 1,
                                                      #save_weights_only = True,
                                                      save_best_only = True,

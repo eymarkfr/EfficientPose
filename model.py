@@ -63,7 +63,8 @@ def build_EfficientPose(phi,
                         score_threshold = 0.5,
                         anchor_parameters = None,
                         num_rotation_parameters = 3,
-                        print_architecture = True):
+                        print_architecture = True,
+                        lite = False):
     """
     Builds an EfficientPose model
     Args:
@@ -100,7 +101,7 @@ def build_EfficientPose(phi,
     camera_parameters_input = layers.Input((6,)) #camera parameters and image scale for calculating the translation vector from 2D x-, y-coordinates
     
     #build EfficientNet backbone
-    backbone_feature_maps = backbone_class(input_tensor = image_input, freeze_bn = freeze_bn)
+    backbone_feature_maps = backbone_class(input_tensor = image_input, freeze_bn = freeze_bn, lite = lite)
     
     #build BiFPN
     fpn_feature_maps = build_BiFPN(backbone_feature_maps, bifpn_depth, bifpn_width, freeze_bn)
@@ -466,6 +467,7 @@ class BoxNet(models.Model):
         outputs = self.head(feature)
         outputs = self.reshape(outputs)
         self.level += 1
+        self.level = self.level % 5
         return outputs
 
 
@@ -506,6 +508,7 @@ class ClassNet(models.Model):
         outputs = self.reshape(outputs)
         outputs = self.activation_sigmoid(outputs)
         self.level += 1
+        self.level = self.level % 5
         return outputs
     
     
@@ -630,6 +633,7 @@ class RotationNet(models.Model):
         
         outputs = self.reshape(rotation)
         self.level += 1
+        self.level = self.level % 5
         return outputs
     
     
@@ -763,6 +767,7 @@ class TranslationNet(models.Model):
         outputs_z = self.reshape_z(translation_z)
         outputs = self.concat_output([outputs_xy, outputs_z])
         self.level += 1
+        self.level = self.level % 5
         return outputs
     
 

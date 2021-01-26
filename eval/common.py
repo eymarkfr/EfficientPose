@@ -111,11 +111,11 @@ def _get_detections(generator, model, score_threshold = 0.05, max_detections = 1
         boxes, scores, labels, rotations, translations = model.predict_on_batch([np.expand_dims(image, axis=0), np.expand_dims(camera_input, axis=0)])[:5]
         
         if tf.version.VERSION >= '2.0.0':
-            boxes = boxes.numpy()
-            scores = scores.numpy()
-            labels = labels.numpy()
-            rotations = rotations.numpy()
-            translations = translations.numpy()
+            boxes = boxes
+            scores = scores
+            labels = labels
+            rotations = rotations
+            translations = translations
 
         # correct boxes for image scale
         boxes /= scale
