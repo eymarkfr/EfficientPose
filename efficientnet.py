@@ -388,7 +388,6 @@ def EfficientNet(width_coefficient,
 
     bn_axis = 3 if backend.image_data_format() == 'channels_last' else 1
     activation = get_swish(**kwargs) if not lite else tf.nn.relu6 # see https://github.com/tensorflow/tpu/tree/master/models/official/efficientnet/lite
-
     # Build stem
     x = img_input
     x = layers.Conv2D(round_filters(32, width_coefficient, depth_divisor), 3,
@@ -438,7 +437,8 @@ def EfficientNet(width_coefficient,
                                   activation=activation,
                                   drop_rate=drop_rate,
                                   prefix=block_prefix,
-                                  freeze_bn=freeze_bn
+                                  freeze_bn=freeze_bn,
+                                  lite=lite
                                   )
                 block_num += 1
         if idx < len(blocks_args) - 1 and blocks_args[idx + 1].strides[0] == 2:

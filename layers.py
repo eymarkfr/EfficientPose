@@ -73,7 +73,10 @@ class wBiFPNAdd(keras.layers.Layer):
 
     def call(self, inputs, **kwargs):
         w = keras.activations.relu(self.w)
-        x = tf.reduce_sum([w[i] * inputs[i] for i in range(len(inputs))], axis=0)
+        x = inputs[0]
+        for i in range(1,len(inputs)):
+            x = x + inputs[i]
+        #x = tf.reduce_sum([w[i] * inputs[i] for i in range(len(inputs))], axis=0)
         x = x / (tf.reduce_sum(w) + self.epsilon)
         return x
 

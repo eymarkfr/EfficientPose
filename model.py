@@ -101,7 +101,7 @@ def build_EfficientPose(phi,
     camera_parameters_input = layers.Input((6,)) #camera parameters and image scale for calculating the translation vector from 2D x-, y-coordinates
     
     #build EfficientNet backbone
-    backbone_feature_maps = backbone_class(input_tensor = image_input, freeze_bn = freeze_bn, lite = lite)
+    backbone_feature_maps = backbone_class(input_tensor = image_input, freeze_bn = freeze_bn, lite = lite, include_top = False)
     
     #build BiFPN
     fpn_feature_maps = build_BiFPN(backbone_feature_maps, bifpn_depth, bifpn_width, freeze_bn)
@@ -129,7 +129,7 @@ def build_EfficientPose(phi,
     
     
     #get the EfficientPose model for training without NMS and the rotation and translation output combined in the transformation output because of the loss calculation
-    efficientpose_train = models.Model(inputs = [image_input, camera_parameters_input], outputs = [classification, bbox_regression, transformation], name = 'efficientpose')
+    efficientpose_train = models.Model(inputs = [image_input, camera_parameters_input], outputs = [classification], name = 'efficientpose')
 
     # filter detections (apply NMS / score threshold / select top-k)
     filtered_detections = FilterDetections(num_rotation_parameters = num_rotation_parameters,
@@ -332,6 +332,15 @@ def bottom_up_pathway_BiFPN(input_feature_maps_bottom_up, num_channels, idx_BiFP
         
     return output_bottom_up_feature_maps
 
+class StaticUpsampling(tf.keras.layers.Layer):
+    def __init__(self):
+        super().__init__()
+    
+    def build(self, input_shape):
+        self.upsampled_output_shape = (2*input_shape[1], 2*input_shape[2])
+    
+    def call(self, inputs, **kwargs):
+        return tf.image.resize(inputs, self.upsampled_output_shape, method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
 
 def single_BiFPN_merge_step(feature_map_other_level, feature_maps_current_level, upsampling, num_channels, idx_BiFPN_layer, node_idx, op_idx):
     """
@@ -348,7 +357,7 @@ def single_BiFPN_merge_step(feature_map_other_level, feature_maps_current_level,
        The merged feature map
     """
     if upsampling:
-        feature_map_resampled = layers.UpSampling2D()(feature_map_other_level)
+        feature_map_resampled = StaticUpsampling()(feature_map_other_level)
     else:
         feature_map_resampled = layers.MaxPooling2D(pool_size = 3, strides = 2, padding = 'same')(feature_map_other_level)
     
@@ -430,7 +439,25 @@ def build_subnets(num_classes, subnet_width, subnet_depth, subnet_num_iteration_
 
     return box_net, class_net, rotation_net, translation_net     
 
+class StaticReshape(tf.keras.layers.Layer):
+    def __init__(self, num_classes):
+        super().__init__()
+        self.num_classes = num_classes
+    
+    def build(self, input_shape):
+        self.static_batch_size = input_shape[0] or -1 # dynamic size
+        self.static_output_length = input_shape[1]*input_shape[2]*(input_shape[3] // self.num_classes)
+        self.static_num_channels = input_shape[3]
+    
+    def call(self, inputs, **kwargs):
+        return tf.reshape(inputs, [self.static_batch_size, self.static_output_length, self.num_classes])
 
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            'num_classes': self.num_classes,
+        })
+        return config
 class BoxNet(models.Model):
     def __init__(self, width, depth, num_anchors = 9, freeze_bn = False, **kwargs):
         super(BoxNet, self).__init__(**kwargs)
@@ -455,7 +482,7 @@ class BoxNet(models.Model):
         
         self.bns = [[BatchNormalization(freeze = freeze_bn, momentum = MOMENTUM, epsilon = EPSILON, name = f'{self.name}/box-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)]
         self.activation = layers.Lambda(lambda x: tf.nn.swish(x))
-        self.reshape = layers.Reshape((-1, self.num_values))
+        self.reshapes = [StaticReshape(self.num_values) for i in range(5)] #layers.Reshape((-1, self.num_values))
         self.level = 0
 
     def call(self, inputs, **kwargs):
@@ -465,11 +492,11 @@ class BoxNet(models.Model):
             feature = self.bns[i][self.level](feature)
             feature = self.activation(feature)
         outputs = self.head(feature)
-        outputs = self.reshape(outputs)
+        #outputs = self.reshape(outputs)
+        outputs = self.reshapes[self.level](outputs)
         self.level += 1
         self.level = self.level % 5
         return outputs
-
 
 class ClassNet(models.Model):
     def __init__(self, width, depth, num_classes = 8, num_anchors = 9, freeze_bn = False, **kwargs):
@@ -494,7 +521,7 @@ class ClassNet(models.Model):
 
         self.bns = [[BatchNormalization(freeze = freeze_bn, momentum = MOMENTUM, epsilon = EPSILON, name = f'{self.name}/class-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)]
         self.activation = layers.Lambda(lambda x: tf.nn.swish(x))
-        self.reshape = layers.Reshape((-1, self.num_classes))
+        self.reshapes = [StaticReshape(self.num_classes) for i in range(5)]
         self.activation_sigmoid = layers.Activation('sigmoid')
         self.level = 0
 
@@ -505,7 +532,7 @@ class ClassNet(models.Model):
             feature = self.bns[i][self.level](feature)
             feature = self.activation(feature)
         outputs = self.head(feature)
-        outputs = self.reshape(outputs)
+        outputs = self.reshapes[self.level](outputs)
         outputs = self.activation_sigmoid(outputs)
         self.level += 1
         self.level = self.level % 5
@@ -612,7 +639,8 @@ class RotationNet(models.Model):
                                                           name = "iterative_rotation_subnet")
 
         self.activation = layers.Lambda(lambda x: tf.nn.swish(x))
-        self.reshape = layers.Reshape((-1, num_values))
+        #self.reshape = layers.Reshape((-1, num_values))
+        self.reshapes = [StaticReshape(num_values) for i in range(5)]
         self.level = 0
         self.add = layers.Add()
         self.concat = layers.Concatenate(axis = channel_axis)
@@ -631,7 +659,8 @@ class RotationNet(models.Model):
             delta_rotation = self.iterative_submodel([iterative_input, level], level_py = self.level, iter_step_py = i)
             rotation = self.add([rotation, delta_rotation])
         
-        outputs = self.reshape(rotation)
+        #outputs = self.reshape(rotation)
+        outputs = self.reshapes[self.level](rotation)
         self.level += 1
         self.level = self.level % 5
         return outputs
@@ -739,8 +768,10 @@ class TranslationNet(models.Model):
                                                              name = "iterative_translation_subnet")
 
         self.activation = layers.Lambda(lambda x: tf.nn.swish(x))
-        self.reshape_xy = layers.Reshape((-1, 2))
-        self.reshape_z = layers.Reshape((-1, 1))
+        # self.reshape_xy = layers.Reshape((-1, 2))
+        # self.reshape_z = layers.Reshape((-1, 1))
+        self.reshapes_xy = [StaticReshape(2) for _ in range(5)]
+        self.reshapes_z = [StaticReshape(1) for _ in range(5)]
         self.level = 0
         self.add = layers.Add()
         self.concat = layers.Concatenate(axis = channel_axis)
@@ -763,8 +794,10 @@ class TranslationNet(models.Model):
             translation_xy = self.add([translation_xy, delta_translation_xy])
             translation_z = self.add([translation_z, delta_translation_z])
         
-        outputs_xy = self.reshape_xy(translation_xy)
-        outputs_z = self.reshape_z(translation_z)
+        # outputs_xy = self.reshape_xy(translation_xy)
+        # outputs_z = self.reshape_z(translation_z)
+        outputs_xy = self.reshapes_xy[self.level](translation_xy)
+        outputs_z = self.reshapes_z[self.level](translation_z)
         outputs = self.concat_output([outputs_xy, outputs_z])
         self.level += 1
         self.level = self.level % 5
