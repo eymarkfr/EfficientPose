@@ -32,6 +32,9 @@ import copy
 from plyfile import PlyData
 
 from generators.common import Generator
+from absl import flags
+
+flags.DEFINE_string("occlusion_path", "/mnt/data/datasets/Linemod_preprocessed", "Path to dataset directory")
 
 
 #Generator for the Occlusion Dataset (Linemod because Occlusion is a subset of linemod) downloaded from here: https://github.com/j96w/DenseFusion and the valid poses from here https://github.com/chensong1995/HybridPose

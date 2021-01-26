@@ -37,7 +37,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-import argparse
 import time
 import os
 import sys
@@ -52,56 +51,39 @@ from efficientnet import BASE_WEIGHTS_PATH, WEIGHTS_HASHES
 
 from custom_load_weights import custom_load_weights
 
+from absl import flags, app
 
-def parse_args(args):
-    """
-    Parse the arguments.
-    """
-    date_and_time = time.strftime("%d_%m_%Y_%H_%M_%S")
-    parser = argparse.ArgumentParser(description = 'Simple EfficientPose training script.')
-    subparsers = parser.add_subparsers(help = 'Arguments for specific dataset types.', dest = 'dataset_type')
-    subparsers.required = True
-    
-    linemod_parser = subparsers.add_parser('linemod')
-    linemod_parser.add_argument('linemod_path', help = 'Path to dataset directory (ie. /Datasets/Linemod_preprocessed).')
-    linemod_parser.add_argument('--object-id', help = 'ID of the Linemod Object to train on', type = int, default = 8)
-    
-    occlusion_parser = subparsers.add_parser('occlusion')
-    occlusion_parser.add_argument('occlusion_path', help = 'Path to dataset directory (ie. /Datasets/Linemod_preprocessed/).')
+date_and_time = time.strftime("%d_%m_%Y_%H_%M_%S")
+flags.DEFINE_enum("rotation_representation", 'axis_angle', ['axis_angle', 'rotation_matrix', 'quaternion'], 'Which representation of the rotation should be used')
+flags.DEFINE_string("weights", None, 'File containing weights to init the model parameter. Can be either a path or "imagenet"')
+flags.DEFINE_bool("freeze_backbone", False, 'Freeze training of backbone layers.')
+flags.DEFINE_bool("freeze_bn", False, 'Freeze training of BatchNormalization layers.')
+flags.DEFINE_integer("batch_size", 5, 'Batch size')
+flags.DEFINE_float("lr", 1e-4, "Learning rate")
+flags.DEFINE_bool("color_augmentation", True, 'Wether or not to use color augmentation')
+flags.DEFINE_bool("use_6dof_augmentation", True, "Wether or not to use 6dof augmentation")
+flags.DEFINE_integer("phi", 0, "Hyper parameter phi", 0, 6)
+flags.DEFINE_integer("epochs", 500, "Number of epochs")
+flags.DEFINE_integer("dataset_size", 1790, "Size of dataset")
+flags.DEFINE_string("snapshot_path", os.path.join("checkpoints", date_and_time), "Where to write the checkpoints to")
+flags.DEFINE_string("tensorboard_dir", os.path.join("logs", date_and_time), "Where to wrote tensorboard logs to")
+flags.DEFINE_bool("snapshots", True, "Wether or not to save snapshots")
+flags.DEFINE_bool("evaluation", True, "Wether or not to run per epoch evaluation")
+flags.DEFINE_bool("compute_val_loss", True, "Wether or not to compute validation loss")
+flags.DEFINE_float("score_threshold", 0.5, "Score threshold for non max suppresion")
+flags.DEFINE_string("validation_image_save_path", None, "Path where to save the predicted validation images after epoch. If not set not images will be generated")
+flags.DEFINE_bool("lite", False, "Wether or not to apply the lite modifications on the backbone")
+flags.DEFINE_enum("dataset_type", "linemod", ["linemod", "occlusion"], "Which dataset to use.")
 
-    parser.add_argument('--rotation-representation', help = 'Which representation of the rotation should be used. Choose from "axis_angle", "rotation_matrix" and "quaternion"', default = 'axis_angle')    
-
-    parser.add_argument('--weights', help = 'File containing weights to init the model parameter')
-    parser.add_argument('--freeze-backbone', help = 'Freeze training of backbone layers.', action = 'store_true')
-    parser.add_argument('--no-freeze-bn', help = 'Do not freeze training of BatchNormalization layers.', action = 'store_true')
-
-    parser.add_argument('--batch-size', help = 'Size of the batches.', default = 1, type = int)
-    parser.add_argument('--lr', help = 'Learning rate', default = 1e-4, type = float)
-    parser.add_argument('--no-color-augmentation', help = 'Do not use colorspace augmentation', action = 'store_true')
-    parser.add_argument('--no-6dof-augmentation', help = 'Do not use 6DoF augmentation', action = 'store_true')
-    parser.add_argument('--phi', help = 'Hyper parameter phi', default = 0, type = int, choices = (0, 1, 2, 3, 4, 5, 6))
-    parser.add_argument('--gpu', help = 'Id of the GPU to use (as reported by nvidia-smi).')
-    parser.add_argument('--epochs', help = 'Number of epochs to train.', type = int, default = 500)
-    parser.add_argument('--steps', help = 'Number of steps per epoch.', type = int, default = int(179 * 10))
-    parser.add_argument('--snapshot-path', help = 'Path to store snapshots of models during training', default = os.path.join("checkpoints", date_and_time))
-    parser.add_argument('--tensorboard-dir', help = 'Log directory for Tensorboard output', default = os.path.join("logs", date_and_time))
-    parser.add_argument('--no-snapshots', help = 'Disable saving snapshots.', dest = 'snapshots', action = 'store_false')
-    parser.add_argument('--no-evaluation', help = 'Disable per epoch evaluation.', dest = 'evaluation', action = 'store_false')
-    parser.add_argument('--compute-val-loss', help = 'Compute validation loss during training', dest = 'compute_val_loss', action = 'store_true')
-    parser.add_argument('--score-threshold', help = 'score threshold for non max suppresion', type = float, default = 0.5)
-    parser.add_argument('--validation-image-save-path', help = 'path where to save the predicted validation images after each epoch', default = None)
-    parser.add_argument('--lite', help='Wether or not to apply the "lite" modifications to the efficientnet backbone', default=False, action='store_true')
-
-    # Fit generator arguments
-    parser.add_argument('--multiprocessing', help = 'Use multiprocessing in fit_generator.', action = 'store_true')
-    parser.add_argument('--workers', help = 'Number of generator workers.', type = int, default = 4)
-    parser.add_argument('--max-queue-size', help = 'Queue length for multiprocessing workers in fit_generator.', type = int, default = 10)
-    
-    print(vars(parser.parse_args(args)))
-    return parser.parse_args(args)
+flags.DEFINE_bool("multiprocessing", False, "Use multiprocessing in fit_generator.")
+flags.DEFINE_integer("workers", 4, "Number of generator workers.")
+flags.DEFINE_integer("max_queue_size", 10, 'Queue length for multiprocessing workers in fit_generator.')
 
 
-def main(args = None):
+
+def main(argv):
+    train(flags.FLAGS)
+def train(args):
     """
     Train an EfficientPose model.
 
@@ -110,11 +92,6 @@ def main(args = None):
     """
     
     allow_gpu_growth_memory()
-    
-    # parse arguments
-    if args is None:
-        args = sys.argv[1:]
-    args = parse_args(args)
 
     # create the generators
     print("\nCreating the Generators...")
@@ -125,15 +102,15 @@ def main(args = None):
     num_classes = train_generator.num_classes()
     num_anchors = train_generator.num_anchors
 
-    # optionally choose specific GPU
-    if args.gpu:
-        os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
+    # # optionally choose specific GPU
+    # if args.gpu:
+    #     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 
     print("\nBuilding the Model...")
     model, prediction_model, all_layers = build_EfficientPose(args.phi,
                                                               num_classes = num_classes,
                                                               num_anchors = num_anchors,
-                                                              freeze_bn = not args.no_freeze_bn,
+                                                              freeze_bn = args.freeze_bn,
                                                               score_threshold = args.score_threshold,
                                                               num_rotation_parameters = num_rotation_parameters,
                                                               lite = args.lite)
@@ -186,7 +163,7 @@ def main(args = None):
     # start training
     return model.fit_generator(
         generator = train_generator,
-        steps_per_epoch = args.steps,
+        steps_per_epoch = args.dataset_size / args.batch_size,
         initial_epoch = 0,
         epochs = args.epochs,
         verbose = 1,
@@ -328,8 +305,8 @@ def create_generators(args):
             args.linemod_path,
             args.object_id,
             rotation_representation = args.rotation_representation,
-            use_colorspace_augmentation = not args.no_color_augmentation,
-            use_6DoF_augmentation = not args.no_6dof_augmentation,
+            use_colorspace_augmentation = args.color_augmentation,
+            use_6DoF_augmentation = args.use_6dof_augmentation,
             **common_args
         )
 
@@ -349,8 +326,8 @@ def create_generators(args):
         train_generator = OcclusionGenerator(
             args.occlusion_path,
             rotation_representation = args.rotation_representation,
-            use_colorspace_augmentation = not args.no_color_augmentation,
-            use_6DoF_augmentation = not args.no_6dof_augmentation,
+            use_colorspace_augmentation = args.color_augmentation,
+            use_6DoF_augmentation = args.use_6dof_augmentation,
             **common_args
         )
 
@@ -371,4 +348,4 @@ def create_generators(args):
 
 
 if __name__ == '__main__':
-    main()
+    app.run(main)

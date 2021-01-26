@@ -32,6 +32,11 @@ import copy
 from plyfile import PlyData
 
 from generators.common import Generator
+from absl import flags
+
+flags.DEFINE_string("linemod_path", "/mnt/data/datasets/Linemod_preprocessed", "Path to dataset directory")
+flags.DEFINE_integer("object_id", 8, 'ID of the Linemod Object to train on')
+
 
 
 #Generator for the LINEMOD Dataset downloaded from here: https://github.com/j96w/DenseFusion
