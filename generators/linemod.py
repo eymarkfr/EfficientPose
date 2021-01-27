@@ -151,7 +151,7 @@ class LineModGenerator(Generator):
         size_z = model_dict["size_z"]
         
         bbox = np.zeros(shape = (8, 3))
-        #untere ebende
+        #untere ebene
         bbox[0, :] = np.array([min_point_x, min_point_y, min_point_z])
         bbox[1, :] = np.array([min_point_x + size_x, min_point_y, min_point_z])
         bbox[2, :] = np.array([min_point_x + size_x, min_point_y + size_y, min_point_z])

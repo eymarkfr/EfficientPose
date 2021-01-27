@@ -161,8 +161,8 @@ def train(args):
         raise ValueError('When you have no validation data, you should not specify --compute-val-loss.')
 
     # start training
-    return model.fit_generator(
-        generator = train_generator,
+    return model.fit(
+        train_generator,
         steps_per_epoch = args.dataset_size / args.batch_size,
         initial_epoch = 0,
         epochs = args.epochs,
@@ -263,12 +263,12 @@ def create_callbacks(training_model, prediction_model, validation_generator, arg
     if args.snapshots:
         # ensure directory created first; otherwise h5py will error after epoch.
         os.makedirs(snapshot_path, exist_ok = True)
-        checkpoint = keras.callbacks.ModelCheckpoint(os.path.join(snapshot_path, 'phi_{phi}_{dataset_type}{is_lite}_best_{metric}.h5'.format(phi = str(args.phi), is_lite = "_lite" if args.lite else "", metric = metric_to_monitor, dataset_type = args.dataset_type)),
+        checkpoint = keras.callbacks.ModelCheckpoint(os.path.join(snapshot_path, 'phi_{phi}_{dataset_type}{is_lite}_best_{{{metric}}}.h5'.format(phi = str(args.phi), is_lite = "_lite" if args.lite else "", metric = "val_loss", dataset_type = args.dataset_type)),
                                                      verbose = 1,
-                                                     #save_weights_only = True,
+                                                     save_weights_only = True,
                                                      save_best_only = True,
-                                                     monitor = metric_to_monitor,
-                                                     mode = mode)
+                                                     monitor = "val_loss",
+                                                     mode = "min")
         callbacks.append(checkpoint)
 
     callbacks.append(keras.callbacks.ReduceLROnPlateau(
@@ -319,7 +319,8 @@ def create_generators(args):
             rotation_representation = args.rotation_representation,
             use_colorspace_augmentation = False,
             use_6DoF_augmentation = False,
-            **common_args
+            phi=args.phi,
+            batch_size=1
         )
     elif args.dataset_type == 'occlusion':
         from generators.occlusion import OcclusionGenerator

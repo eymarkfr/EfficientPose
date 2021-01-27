@@ -12,6 +12,9 @@ flags.DEFINE_string("android_path", "/data/local/tmp", "Where to store model on 
 flags.DEFINE_integer("num_threads", 4, "Number of threads for benchmarking")
 flags.DEFINE_bool("use_gpu", True, "Wether or not to use the gpu")
 flags.DEFINE_string("android_benchmark_model", "/data/local/tmp/benchmark_model", "Where to find the benchmarking tool")
+flags.DEFINE_integer("num_runs", 50, "How often to run")
+flags.DEFINE_integer("warmup_runs", 20, "Number of warmup runs")
+flags.DEFINE_bool("op_profiling", False, "Wether or not to enable op profiling")
 
 def run_cmd(cmd):
     #print(f"Executing {cmd.split()}")
@@ -32,7 +35,7 @@ def main(argv):
   print(run_cmd(f"adb push {model_file} {args.android_path}"))
   print()
   print("Running benchmark")
-  print(run_cmd(f"adb shell {args.android_benchmark_model} --graph={android_path} --num_threads={args.num_threads} --use_gpu={'true' if args.use_gpu else 'false'} --num_runs={3}"))
+  print(run_cmd(f"adb shell {args.android_benchmark_model} --graph={android_path} --num_threads={args.num_threads} --use_gpu={'true' if args.use_gpu else 'false'} --num_runs={args.num_runs} --warmup_runs={args.warmup_runs} --enable_op_profiling={'true' if args.op_profiling else 'false'}"))
 
 if __name__ == "__main__":
   app.run(main)

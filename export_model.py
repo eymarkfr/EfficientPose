@@ -1,5 +1,12 @@
 from genericpath import exists
 import tensorflow as tf 
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
 import model
 import tfkeras
 import os
@@ -25,15 +32,9 @@ def convert(args):
                                                   freeze_bn = True,
                                                   score_threshold = args.score_threshold,
                                                   num_rotation_parameters = rot_parameters[args.rotation_representation],
-                                                  lite = args.lite) 
-  # inp = tf.keras.layers.Input((640, 512, 3))
-  # backbone_feature_maps = tfkeras.EfficientNetB0(input_tensor=inp, lite=args.lite)
-  # prediction_model = tf.keras.Model(inputs=inp, outputs=backbone_feature_maps[-1])
-  #saved_model = os.path.join(args.models_dir, f"{args.base_name}_phi{args.phi}{'_lite' if args.lite else ''}.tf")
-  #tf.saved_model.save(prediction_model, saved_model)
-  # fpn_feature_maps = model.build_BiFPN(backbone_feature_maps, 3, 64, False)
-  # prediction_model = tf.keras.Model(inputs=inp, outputs=fpn_feature_maps)
-  # print(prediction_model)
+                                                  lite = args.lite,
+                                                  for_converter=True,
+                                                  batch_size=None) 
   converter = tf.lite.TFLiteConverter.from_keras_model(prediction_model)
   converter.experimental_new_converter = True
   converter.target_spec.supported_ops = [

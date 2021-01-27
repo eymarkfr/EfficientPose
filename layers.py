@@ -90,7 +90,7 @@ class wBiFPNAdd(keras.layers.Layer):
         })
         return config
 
-
+@tf.function
 def bbox_transform_inv(boxes, deltas, scale_factors = None):
     """
     Reconstructs the 2D bounding boxes using the anchor boxes and the predicted deltas of the anchor boxes to the bounding boxes
@@ -154,20 +154,14 @@ class ClipBoxes(keras.layers.Layer):
     """
     Layer that clips 2D bounding boxes so that they are inside the image
     """
-    def call(self, inputs, **kwargs):
-        image, boxes = inputs
-        shape = keras.backend.cast(keras.backend.shape(image), keras.backend.floatx())
-        height = shape[1]
-        width = shape[2]
-        x1 = tf.clip_by_value(boxes[:, :, 0], 0, width - 1)
-        y1 = tf.clip_by_value(boxes[:, :, 1], 0, height - 1)
-        x2 = tf.clip_by_value(boxes[:, :, 2], 0, width - 1)
-        y2 = tf.clip_by_value(boxes[:, :, 3], 0, height - 1)
-
-        return keras.backend.stack([x1, y1, x2, y2], axis=2)
+    def call(self, inputs, height, width, **kwargs):
+        return tf.clip_by_value(inputs, [[0, 0, 0, 0]], [[width - 1, height - 1, width - 1, height - 1]])
 
     def compute_output_shape(self, input_shape):
         return input_shape[1]
+    
+    def get_config(self):
+        return super().get_config()
 
 
 class RegressBoxes(keras.layers.Layer):
@@ -177,8 +171,7 @@ class RegressBoxes(keras.layers.Layer):
     def __init__(self, *args, **kwargs):
         super(RegressBoxes, self).__init__(*args, **kwargs)
 
-    def call(self, inputs, **kwargs):
-        anchors, regression = inputs
+    def call(self, regression, anchors, **kwargs):
         return bbox_transform_inv(anchors, regression)
 
     def compute_output_shape(self, input_shape):
@@ -211,7 +204,17 @@ class RegressTranslation(keras.layers.Layer):
         config = super(RegressTranslation, self).get_config()
 
         return config
+
+class StaticAddAxis(keras.layers.Layer):
+    def build(self, input_shape):
+        self.needs_axis = len(input_shape) != 2
+        return super().build(input_shape)
     
+    def call(self, inputs, **kwargs):
+        if self.needs_axis:
+            return inputs[..., tf.newaxis]
+        else:
+            return inputs
     
 class CalculateTxTy(keras.layers.Layer):
     """ Keras layer for calculating the Tx- and Ty-Components of the Translationvector with a given 2D-point and the intrinsic camera parameters.
@@ -222,26 +225,43 @@ class CalculateTxTy(keras.layers.Layer):
         """
         super(CalculateTxTy, self).__init__(*args, **kwargs)
 
-    def call(self, inputs, fx = 572.4114, fy = 573.57043, px = 325.2611, py = 242.04899, tz_scale = 1000.0, image_scale = 1.6666666666666667, **kwargs):
+    def call(self, inputs, fx = 572.4114, fy = 573.57043, px = 325.2611, py = 242.04899, tz_scale = 1000.0, image_scale = 1.6666666666666667, for_converter=False, **kwargs):
         # Tx = (cx - px) * Tz / fx
         # Ty = (cy - py) * Tz / fy
         
-        fx = tf.expand_dims(fx, axis = -1)
-        fy = tf.expand_dims(fy, axis = -1)
-        px = tf.expand_dims(px, axis = -1)
-        py = tf.expand_dims(py, axis = -1)
-        tz_scale = tf.expand_dims(tz_scale, axis = -1)
-        image_scale = tf.expand_dims(image_scale, axis = -1)
-        
+        # fx = tf.reshape(fx, (1,))
+        # fy = tf.reshape(fy, (1,))
+        # px = tf.reshape(px, (1,))
+        # py = tf.reshape(py, (1,))
+        # tz_scale = tf.reshape(tz_scale, (1,))
+        # image_scale = tf.reshape(image_scale, (1,))
+        if not for_converter:
+            fx = fx[..., tf.newaxis]
+            fy = fy[..., tf.newaxis]
+            px = px[..., tf.newaxis]
+            py = py[..., tf.newaxis]
+            tz_scale = tz_scale[..., tf.newaxis]
+            image_scale = image_scale[..., tf.newaxis]
+        # fx = tf.expand_dims(fx, -1)
+        # fy = tf.expand_dims(fy, -1)
+        # px = tf.expand_dims(px, -1)
+        # py = tf.expand_dims(py, -1)
+        # tz_scale = tf.expand_dims(tz_scale, -1)
+        # image_scale = tf.expand_dims(image_scale, -1)
+
         x = inputs[:, :, 0] / image_scale
         y = inputs[:, :, 1] / image_scale
         tz = inputs[:, :, 2] * tz_scale
+        # inputs = inputs * [1.0/image_scale, 1.0/image_scale, tz_scale]
+        # inputs = inputs - [px, py, 0.0]
         
         x = x - px
         y = y - py
         
         tx = tf.math.multiply(x, tz) / fx
         ty = tf.math.multiply(y, tz) / fy
+
+        #output = (inputs * [tz, tz, 1.0]) / [fx, fy, 1.0]
         
         output = tf.stack([tx, ty, tz], axis = -1)
         
@@ -255,6 +275,21 @@ class CalculateTxTy(keras.layers.Layer):
 
         return config
 
+class NMSStatic(tf.keras.layers.Layer):
+    def __init__(self, max_output_size, name="NMS", **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.max_output_size = max_output_size
+    
+    def call(self, boxes, scores, thresh, **kwargs):
+        return tf.image.non_max_suppression_padded(boxes, scores, self.max_output_size, thresh, pad_to_max_output_size=True)
+    
+    def compute_output_shape(self, input_shape):
+        return [(self.max_output_size,), (0,)]
+    
+    def get_config(self):
+        config = super().get_config()
+        config.update({'max_output_size': self.max_output_size})
+        return config
 
 def filter_detections(
         boxes,
@@ -268,6 +303,7 @@ def filter_detections(
         score_threshold = 0.01,
         max_detections = 100,
         nms_threshold = 0.5,
+        for_converter = False,
 ):
     """
     Filter detections using the boxes and classification values.
@@ -322,8 +358,7 @@ def filter_detections(
             # perform NMS
             # filtered_boxes = tf.concat([filtered_boxes[..., 1:2], filtered_boxes[..., 0:1],
             #                             filtered_boxes[..., 3:4], filtered_boxes[..., 2:3]], axis=-1)
-            nms_indices = tf.image.non_max_suppression(filtered_boxes, filtered_scores, max_output_size=max_detections,
-                                                       iou_threshold=nms_threshold)
+            nms_indices, num_valid = NMSStatic(max_detections)(filtered_boxes, filtered_scores, nms_threshold)
 
             # filter indices based on NMS
             # (num_score_nms_keeps, 1)
@@ -399,6 +434,7 @@ class FilterDetections(keras.layers.Layer):
             score_threshold = 0.01,
             max_detections = 100,
             parallel_iterations = 32,
+            for_converter = False,
             **kwargs
     ):
         """
@@ -422,6 +458,7 @@ class FilterDetections(keras.layers.Layer):
         self.parallel_iterations = parallel_iterations
         self.num_rotation_parameters = num_rotation_parameters
         self.num_translation_parameters = num_translation_parameters
+        self.for_converter = for_converter
         super(FilterDetections, self).__init__(**kwargs)
 
     def call(self, inputs, **kwargs):
@@ -435,6 +472,21 @@ class FilterDetections(keras.layers.Layer):
         classification = inputs[1]
         rotation = inputs[2]
         translation = inputs[3]
+
+        if self.for_converter:
+            return filter_detections(
+                boxes[0, ...],
+                classification[0, ...],
+                rotation[0, ...],
+                translation[0, ...],
+                self.num_rotation_parameters,
+                self.num_translation_parameters,
+                nms = self.nms,
+                class_specific_filter = self.class_specific_filter,
+                score_threshold = self.score_threshold,
+                max_detections = self.max_detections,
+                nms_threshold = self.nms_threshold,
+            ) 
 
         # wrap nms with our parameters
         def _filter_detections(args):
@@ -599,7 +651,7 @@ class GroupNormalization(tf.keras.layers.Layer):
         self.built = True
         super().build(input_shape)
 
-    def call(self, inputs):
+    def call(self, inputs, training=False):
 
         input_shape = tf.keras.backend.int_shape(inputs)
         tensor_input_shape = tf.shape(inputs)
