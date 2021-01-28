@@ -58,7 +58,7 @@ flags.DEFINE_enum("rotation_representation", 'axis_angle', ['axis_angle', 'rotat
 flags.DEFINE_string("weights", None, 'File containing weights to init the model parameter. Can be either a path or "imagenet"')
 flags.DEFINE_bool("freeze_backbone", False, 'Freeze training of backbone layers.')
 flags.DEFINE_bool("freeze_bn", False, 'Freeze training of BatchNormalization layers.')
-flags.DEFINE_integer("batch_size", 5, 'Batch size')
+flags.DEFINE_integer("batch_size", 1, 'Batch size')
 flags.DEFINE_float("lr", 1e-4, "Learning rate")
 flags.DEFINE_bool("color_augmentation", True, 'Wether or not to use color augmentation')
 flags.DEFINE_bool("use_6dof_augmentation", True, "Wether or not to use 6dof augmentation")
@@ -71,13 +71,14 @@ flags.DEFINE_bool("snapshots", True, "Wether or not to save snapshots")
 flags.DEFINE_bool("evaluation", True, "Wether or not to run per epoch evaluation")
 flags.DEFINE_bool("compute_val_loss", True, "Wether or not to compute validation loss")
 flags.DEFINE_float("score_threshold", 0.5, "Score threshold for non max suppresion")
-flags.DEFINE_string("validation_image_save_path", None, "Path where to save the predicted validation images after epoch. If not set not images will be generated")
+flags.DEFINE_string("validation_image_save_path", None, "Path where to save the predicted validation images after epoch. If not set no images will be generated")
 flags.DEFINE_bool("lite", False, "Wether or not to apply the lite modifications on the backbone")
 flags.DEFINE_enum("dataset_type", "linemod", ["linemod", "occlusion"], "Which dataset to use.")
 
 flags.DEFINE_bool("multiprocessing", False, "Use multiprocessing in fit_generator.")
 flags.DEFINE_integer("workers", 4, "Number of generator workers.")
 flags.DEFINE_integer("max_queue_size", 10, 'Queue length for multiprocessing workers in fit_generator.')
+flags.DEFINE_bool("no_se", False, "Wether or not to remove SE step.")
 
 
 
@@ -113,7 +114,8 @@ def train(args):
                                                               freeze_bn = args.freeze_bn,
                                                               score_threshold = args.score_threshold,
                                                               num_rotation_parameters = num_rotation_parameters,
-                                                              lite = args.lite)
+                                                              lite = args.lite,
+                                                              no_se = args.no_se)
     print("Done!")
     # load pretrained weights
     if args.weights:
@@ -266,7 +268,7 @@ def create_callbacks(training_model, prediction_model, validation_generator, arg
         checkpoint = keras.callbacks.ModelCheckpoint(os.path.join(snapshot_path, 'phi_{phi}_{dataset_type}{is_lite}_best_{{{metric}}}.h5'.format(phi = str(args.phi), is_lite = "_lite" if args.lite else "", metric = "val_loss", dataset_type = args.dataset_type)),
                                                      verbose = 1,
                                                      save_weights_only = True,
-                                                     save_best_only = True,
+                                                     #save_best_only = True,
                                                      monitor = "val_loss",
                                                      mode = "min")
         callbacks.append(checkpoint)

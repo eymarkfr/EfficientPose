@@ -51,9 +51,13 @@ from initializers import PriorProbability
 from utils.anchors import anchors_for_shape
 import numpy as np
 import sys
+from absl import flags
 
 MOMENTUM = 0.997
 EPSILON = 1e-4
+
+flags.DEFINE_bool("use_groupnorm", False, "Wether or not to use GroupNorm. Note that GroupNorm currently does not support mobile GPU")
+FLAGS = flags.FLAGS 
 
 
 def build_EfficientPose(phi,
@@ -65,6 +69,7 @@ def build_EfficientPose(phi,
                         num_rotation_parameters = 3,
                         print_architecture = False,
                         lite = False,
+                        no_se = False,
                         for_converter = False,
                         batch_size = None):
     """
@@ -117,7 +122,7 @@ def build_EfficientPose(phi,
         tz_scale_in = camera_parameters_input[:, 4]
         image_scale_in = camera_parameters_input[:, 5]
     #build EfficientNet backbone
-    backbone_feature_maps = backbone_class(input_tensor = image_input, freeze_bn = freeze_bn, lite = lite, include_top = False)
+    backbone_feature_maps = backbone_class(input_tensor = image_input, freeze_bn = freeze_bn, lite = lite, include_top = False, no_se = no_se)
     
     #build BiFPN
     fpn_feature_maps = build_BiFPN(backbone_feature_maps, bifpn_depth, bifpn_width, freeze_bn, lite)
@@ -159,7 +164,7 @@ def build_EfficientPose(phi,
                                             num_translation_parameters = 3,
                                             name = 'filtered_detections',
                                             score_threshold = score_threshold,
-                                            for_converter = True
+                                            for_converter = for_converter
                                             )([bboxes, classification, rotation, translation])
 
         efficientpose_prediction = models.Model(inputs = [image_input, fx_in, fy_in, px_in, py_in, tz_scale_in, image_scale_in], outputs = filtered_detections, name = 'efficientpose_prediction')
@@ -471,7 +476,7 @@ def build_subnets(num_classes, subnet_width, subnet_depth, subnet_num_iteration_
                                 num_iteration_steps = subnet_num_iteration_steps,
                                 num_anchors = num_anchors,
                                 freeze_bn = freeze_bn,
-                                use_group_norm = False,
+                                use_group_norm = FLAGS.use_groupnorm,
                                 num_groups_gn = num_groups_gn,
                                 name = 'rotation_net', 
                                 lite = lite)
@@ -481,7 +486,7 @@ def build_subnets(num_classes, subnet_width, subnet_depth, subnet_num_iteration_
                                 num_iteration_steps = subnet_num_iteration_steps,
                                 num_anchors = num_anchors,
                                 freeze_bn = freeze_bn,
-                                use_group_norm = False,
+                                use_group_norm = FLAGS.use_groupnorm,
                                 num_groups_gn = num_groups_gn,
                                 name = 'translation_net',
                                 lite = lite)
@@ -581,7 +586,7 @@ class ClassNet(models.Model):
             self.activation = layers.Lambda(lambda x: tf.nn.swish(x))
         #self.reshape = layers.Reshape((-1, self.num_classes))
         self.reshapes = [StaticReshape(self.num_classes, name=f"classnet_reshape_{i+1}") for i in range(5)]
-        self.activation_sigmoid = layers.Activation('sigmoid') if not lite else layers.Lambda(lambda x: tf.nn.relu6(x))
+        self.activation_sigmoid = layers.Activation('sigmoid') # if not lite else layers.Lambda(lambda x: tf.nn.relu6(x))
         self.level = 0
 
     def call(self, inputs, **kwargs):

@@ -202,10 +202,10 @@ def round_repeats(repeats, depth_coefficient):
     return int(math.ceil(depth_coefficient * repeats))
 
 
-def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', freeze_bn=False, lite=False):
+def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', freeze_bn=False, lite=False, no_se=False):
     """Mobile Inverted Residual Bottleneck."""
-
-    has_se = not lite and ((block_args.se_ratio is not None) and (0 < block_args.se_ratio <= 1)) # see https://github.com/tensorflow/tpu/tree/master/models/official/efficientnet/lite
+    no_se = no_se or lite
+    has_se = not no_se and ((block_args.se_ratio is not None) and (0 < block_args.se_ratio <= 1)) # see https://github.com/tensorflow/tpu/tree/master/models/official/efficientnet/lite
     bn_axis = 3 if backend.image_data_format() == 'channels_last' else 1
 
     # workaround over non working dropout with None in noise_shape in tf.keras
@@ -308,6 +308,7 @@ def EfficientNet(width_coefficient,
                  classes=1000,
                  freeze_bn=False,
                  lite=False,
+                 no_se = False, 
                  **kwargs):
     """Instantiates the EfficientNet architecture using given scaling coefficients.
     Optionally loads weights pre-trained on ImageNet.
@@ -419,7 +420,8 @@ def EfficientNet(width_coefficient,
                           drop_rate=drop_rate,
                           prefix='block{}a_'.format(idx + 1),
                           freeze_bn=freeze_bn,
-                          lite=lite
+                          lite=lite,
+                          no_se=no_se
                           )
         block_num += 1
         if block_args.num_repeat > 1:
@@ -438,7 +440,8 @@ def EfficientNet(width_coefficient,
                                   drop_rate=drop_rate,
                                   prefix=block_prefix,
                                   freeze_bn=freeze_bn,
-                                  lite=lite
+                                  lite=lite,
+                                  no_se=no_se
                                   )
                 block_num += 1
         if idx < len(blocks_args) - 1 and blocks_args[idx + 1].strides[0] == 2:

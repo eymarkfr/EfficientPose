@@ -23,7 +23,9 @@ def run_cmd(cmd):
     return result.stdout.decode('utf-8')
 
 def main(argv):
-  args = flags.FLAGS
+  benchmark(flags.FLAGS)
+  
+def benchmark(args):
   print("Make sure that the benchmarking app is installed with flex delegate.")
   print("For further instructions see https://www.tensorflow.org/lite/performance/measurement")
   print("Quick download benchmarking app (Jan 26. 2021): https://storage.googleapis.com/tensorflow-nightly-public/prod/tensorflow/release/lite/tools/nightly/latest/android_aarch64_benchmark_model_plus_flex")

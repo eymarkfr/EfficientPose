@@ -26,6 +26,7 @@ Keras RetinaNet implementation (https://github.com/fizyr/keras-retinanet) licens
 # import keras
 from tensorflow import keras
 import tensorflow as tf
+from tensorflow.python.keras.backend import reshape
 from typeguard import typechecked
 from typing import Union, Callable
 
@@ -358,8 +359,9 @@ def filter_detections(
             # perform NMS
             # filtered_boxes = tf.concat([filtered_boxes[..., 1:2], filtered_boxes[..., 0:1],
             #                             filtered_boxes[..., 3:4], filtered_boxes[..., 2:3]], axis=-1)
-            nms_indices, num_valid = NMSStatic(max_detections)(filtered_boxes, filtered_scores, nms_threshold)
-
+            #nms_indices, num_valid = NMSStatic(max_detections)(filtered_boxes, filtered_scores, nms_threshold)
+            nms_indices = tf.image.non_max_suppression(filtered_boxes, filtered_scores, max_output_size=max_detections,
+                                                       iou_threshold=nms_threshold)
             # filter indices based on NMS
             # (num_score_nms_keeps, 1)
             indices_ = keras.backend.gather(indices_, nms_indices)
@@ -649,6 +651,8 @@ class GroupNormalization(tf.keras.layers.Layer):
         self._add_gamma_weight(input_shape)
         self._add_beta_weight(input_shape)
         self.built = True
+        # self.static_input_shape = input_shape
+        # self.static_group_shape = self.compute_group_shape(input_shape)
         super().build(input_shape)
 
     def call(self, inputs, training=False):
@@ -663,6 +667,9 @@ class GroupNormalization(tf.keras.layers.Layer):
         normalized_inputs = self._apply_normalization(reshaped_inputs, input_shape)
 
         outputs = tf.reshape(normalized_inputs, tensor_input_shape)
+        # reshaped_inputs = tf.reshape(inputs, self.static_group_shape)
+        # normalized_inputs = self._apply_normalization(reshaped_inputs, self.static_input_shape)
+        # outputs = tf.reshape(normalized_inputs, self.static_input_shape)
 
         return outputs
 
@@ -689,6 +696,14 @@ class GroupNormalization(tf.keras.layers.Layer):
 
     def compute_output_shape(self, input_shape):
         return input_shape
+    
+    def compute_group_shape(self, input_shape):
+        group_shape = input_shape
+        group_shape[self.axis] = input_shape[self.axis] // self.groups
+        group_shape.insert(self.axis, self.groups)
+        group_shape = tf.stack(group_shape)
+        return group_shape
+
 
     def _reshape_into_groups(self, inputs, input_shape, tensor_input_shape):
 

@@ -45,38 +45,27 @@ import tensorflow as tf
 
 from model import build_EfficientPose
 from eval.common import evaluate
+from generators.linemod import LineModGenerator
+from generators.occlusion import OcclusionGenerator
+from absl import flags, app
 
-
-def parse_args(args):
-    """
-    Parse the arguments.
-    """
-    parser = argparse.ArgumentParser(description='Simple EfficientPose evaluation script.')
-    subparsers = parser.add_subparsers(help = 'Arguments for specific dataset types.', dest='dataset_type')
-    subparsers.required = True
     
-    linemod_parser = subparsers.add_parser('linemod')
-    linemod_parser.add_argument('linemod_path', help = 'Path to dataset directory (ie. /Datasets/Linemod_preprocessed).')
-    linemod_parser.add_argument('--object-id', help = 'ID of the Linemod Object to train on', type = int, default = 8)
-    
-    occlusion_parser = subparsers.add_parser('occlusion')
-    occlusion_parser.add_argument('occlusion_path', help = 'Path to dataset directory (ie. /Datasets/Linemod_preprocessed).')
+flags.DEFINE_enum("rotation_representation", 'axis_angle', ['axis_angle', 'rotation_matrix', 'quaternion'], 'Which representation of the rotation should be used')
+flags.DEFINE_string("weights", None, 'File containing weights to init the model parameter. Can be either a path or "imagenet"')
 
-    parser.add_argument('--rotation-representation', help = 'Which representation of the rotation should be used. Choose from "axis_angle", "rotation_matrix" and "quaternion"', default = 'axis_angle')
+flags.DEFINE_integer("batch_size", 1, 'Batch size')
+flags.DEFINE_integer("phi", 0, "Hyper parameter phi", 0, 6)
+flags.DEFINE_float("score_threshold", 0.5, "Score threshold for non max suppresion")
+flags.DEFINE_string("validation_image_save_path", None, "Path where to save the predicted validation images after epoch. If not set not images will be generated")
+flags.DEFINE_bool("lite", False, "Wether or not to apply the lite modifications on the backbone")
+flags.DEFINE_enum("dataset_type", "linemod", ["linemod", "occlusion"], "Which dataset to use.")
+flags.DEFINE_bool("no_se", False, "Wether or not to remove SE step.")
+flags.DEFINE_bool("freeze_bn", False, 'Freeze training of BatchNormalization layers.')
 
-    parser.add_argument('--weights', help = 'File containing weights to init the model parameter')
+def main(argv):
+    run_eval(flags.FLAGS)
 
-    parser.add_argument('--batch-size', help = 'Size of the batches.', default = 1, type = int)
-    parser.add_argument('--phi', help = 'Hyper parameter phi', default = 0, type = int, choices = (0, 1, 2, 3, 4, 5, 6))
-    parser.add_argument('--gpu', help = 'Id of the GPU to use (as reported by nvidia-smi).')
-    parser.add_argument('--score-threshold', help = 'score threshold for non max suppresion', type = float, default = 0.5)
-    parser.add_argument('--validation-image-save-path', help = 'path where to save the predicted validation images after each epoch', default = None)
-    
-    print(vars(parser.parse_args(args)))
-    return parser.parse_args(args)
-
-
-def main(args=None):
+def run_eval(args):
     """
     Evaluate an EfficientPose model.
 
@@ -86,10 +75,6 @@ def main(args=None):
     
     allow_gpu_growth_memory()
     
-    # parse arguments
-    if args is None:
-        args = sys.argv[1:]
-    args = parse_args(args)
     
     if args.validation_image_save_path:
         os.makedirs(args.validation_image_save_path, exist_ok = True)
@@ -103,18 +88,16 @@ def main(args=None):
     num_classes = generator.num_classes()
     num_anchors = generator.num_anchors
 
-    # optionally choose specific GPU
-    if args.gpu:
-        os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
-
     print("\nBuilding the Model...")
     _, prediction_model, _ = build_EfficientPose(args.phi,
                                                  num_classes = num_classes,
                                                  num_anchors = num_anchors,
-                                                 freeze_bn = True,
+                                                 freeze_bn = args.freeze_bn,
                                                  score_threshold = args.score_threshold,
                                                  num_rotation_parameters = num_rotation_parameters,
-                                                 print_architecture = False)
+                                                 print_architecture = False,
+                                                 lite = args.lite,
+                                                 no_se = args.no_se)
     print("Done!")
     # load pretrained weights
     print('Loading model, this may take a second...')
@@ -129,10 +112,14 @@ def allow_gpu_growth_memory():
         Set allow growth GPU memory to true
 
     """
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-    _ = tf.Session(config = config)
-    
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError as e:
+            print(e)
+
     
 def create_generators(args):
     """
@@ -150,8 +137,6 @@ def create_generators(args):
     }
 
     if args.dataset_type == 'linemod':
-        from generators.linemod import LineModGenerator
-        
         generator = LineModGenerator(
             args.linemod_path,
             args.object_id,
@@ -164,8 +149,6 @@ def create_generators(args):
             **common_args
         )
     elif args.dataset_type == 'occlusion':
-        from generators.occlusion import OcclusionGenerator
-        
         generator = OcclusionGenerator(
             args.occlusion_path,
             train = False,
@@ -365,4 +348,4 @@ def evaluate_model(model, generator, save_path, score_threshold, iou_threshold =
 
 
 if __name__ == '__main__':
-    main()
+    app.run(main)

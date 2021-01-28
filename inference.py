@@ -45,13 +45,13 @@ def main():
     allow_gpu_growth_memory()
 
     #input parameter
-    path_to_images = "/Datasets/Linemod_preprocessed/data/02/rgb/"
+    path_to_images = "/mnt/data/datasets/Linemod_preprocessed/data/08/rgb"
     image_extension = ".png"
     phi = 0
-    path_to_weights = "./weights/phi_0_occlusion_best_ADD(-S).h5"
-    save_path = "./predictions/occlusion/" #where to save the images or None if the images should be displayed and not saved
+    path_to_weights = "checkpoints/27_01_2021_16_03_12/object_8/phi_0_linemod_lite_best_6.5709004402160645.h5"
+    save_path = "./predictions/linemod/" #where to save the images or None if the images should be displayed and not saved
     # save_path = None
-    class_to_name = {0: "ape", 1: "can", 2: "cat", 3: "driller", 4: "duck", 5: "eggbox", 6: "glue", 7: "holepuncher"} #Occlusion
+    class_to_name = {8: "driller"} #{0: "ape", 1: "can", 2: "cat", 3: "driller", 4: "duck", 5: "eggbox", 6: "glue", 7: "holepuncher"} #Occlusion
     #class_to_name = {0: "driller"} #Linemod use a single class with a name of the Linemod objects
     score_threshold = 0.5
     translation_scale_norm = 1000.0
@@ -117,9 +117,13 @@ def allow_gpu_growth_memory():
         Set allow growth GPU memory to true
 
     """
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-    _ = tf.Session(config = config)
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError as e:
+            print(e)
 
 
 def get_linemod_camera_matrix():
@@ -205,13 +209,14 @@ def build_model_and_load_weights(phi, num_classes, score_threshold, path_to_weig
     """
     
     print("\nBuilding model...\n")
-    _, efficientpose_prediction, _ = build_EfficientPose(phi,
+    blub, efficientpose_prediction, _ = build_EfficientPose(phi,
                                                          num_classes = num_classes,
                                                          num_anchors = 9,
-                                                         freeze_bn = True,
+                                                         freeze_bn = False,
                                                          score_threshold = score_threshold,
                                                          num_rotation_parameters = 3,
-                                                         print_architecture = False)
+                                                         print_architecture = False,
+                                                         lite = True)
     
     print("\nDone!\n\nLoading weights...")
     efficientpose_prediction.load_weights(path_to_weights, by_name=True)
