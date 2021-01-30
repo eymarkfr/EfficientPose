@@ -48,6 +48,7 @@ from eval.common import evaluate
 from generators.linemod import LineModGenerator
 from generators.occlusion import OcclusionGenerator
 from absl import flags, app
+from utils.weight_loader import load_weights_rec
 
     
 flags.DEFINE_enum("rotation_representation", 'axis_angle', ['axis_angle', 'rotation_matrix', 'quaternion'], 'Which representation of the rotation should be used')
@@ -89,7 +90,7 @@ def run_eval(args):
     num_anchors = generator.num_anchors
 
     print("\nBuilding the Model...")
-    _, prediction_model, _ = build_EfficientPose(args.phi,
+    nlub, prediction_model, _ = build_EfficientPose(args.phi,
                                                  num_classes = num_classes,
                                                  num_anchors = num_anchors,
                                                  freeze_bn = args.freeze_bn,
@@ -101,9 +102,7 @@ def run_eval(args):
     print("Done!")
     # load pretrained weights
     print('Loading model, this may take a second...')
-    prediction_model.load_weights(args.weights, by_name = True)
-    print("\nDone!")
-    
+    load_weights_rec(prediction_model, args.weights)
     evaluate_model(prediction_model, generator, args.validation_image_save_path, args.score_threshold)
     
     

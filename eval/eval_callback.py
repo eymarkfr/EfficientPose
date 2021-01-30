@@ -236,74 +236,7 @@ class Evaluate(keras.callbacks.Callback):
         self.mean_mixed_transformed_std = sum(mixed_transformed_diffs_std) / len(mixed_transformed_diffs_std)
 
         if self.tensorboard is not None:
-            if tf.version.VERSION < '2.0.0' and self.tensorboard.writer is not None:
-                summary = tf.Summary()
-                #mAP
-                summary_value_map = summary.value.add()
-                summary_value_map.simple_value = self.mean_ap
-                summary_value_map.tag = "mAP"
-                #ADD
-                summary_value_add = summary.value.add()
-                summary_value_add.simple_value = self.mean_add
-                summary_value_add.tag = "ADD"
-                #ADD-S
-                summary_value_add_s = summary.value.add()
-                summary_value_add_s.simple_value = self.mean_add_s
-                summary_value_add_s.tag = "ADD-S"
-                #5cm 5degree
-                summary_value_5cm_5degree = summary.value.add()
-                summary_value_5cm_5degree.simple_value = self.mean_5cm_5degree
-                summary_value_5cm_5degree.tag = "5cm_5degree"
-                #translation
-                summary_value_translation_mean = summary.value.add()
-                summary_value_translation_mean.simple_value = self.mean_translation_mean
-                summary_value_translation_mean.tag = "TranslationErrorMean_in_mm"
-                summary_value_translation_std = summary.value.add()
-                summary_value_translation_std.simple_value = self.mean_translation_std
-                summary_value_translation_std.tag = "TranslationErrorStd_in_mm"
-                #rotation
-                summary_value_rotation_mean = summary.value.add()
-                summary_value_rotation_mean.simple_value = self.mean_rotation_mean
-                summary_value_rotation_mean.tag = "RotationErrorMean_in_degree"
-                summary_value_rotation_std = summary.value.add()
-                summary_value_rotation_std.simple_value = self.mean_rotation_std
-                summary_value_rotation_std.tag = "RotationErrorStd_in_degree"
-                #2d projection
-                summary_value_2d_projection = summary.value.add()
-                summary_value_2d_projection.simple_value = self.mean_2d_projection
-                summary_value_2d_projection.tag = "2D_Projection"
-                #summed translation and rotation errors for lr scheduling
-                summary_value_summed_error = summary.value.add()
-                summary_value_summed_error.simple_value = self.mean_translation_mean + self.mean_translation_std + self.mean_rotation_mean + self.mean_rotation_std
-                summary_value_summed_error.tag = "Summed_Translation_Rotation_Error"
-                #ADD(-S)
-                summary_value_mixed_add_and_add_s_metric = summary.value.add()
-                summary_value_mixed_add_and_add_s_metric.simple_value = self.mean_mixed_add_and_add_s_metric
-                summary_value_mixed_add_and_add_s_metric.tag = "ADD(-S)"
-                #average point distances
-                summary_value_transformed_sym_mean = summary.value.add()
-                summary_value_transformed_sym_mean.simple_value = self.mean_transformed_sym_mean
-                summary_value_transformed_sym_mean.tag = "AverageSymmetricPointDistanceMean_in_mm"
-                summary_value_transformed_sym_std = summary.value.add()
-                summary_value_transformed_sym_std.simple_value = self.mean_transformed_sym_std
-                summary_value_transformed_sym_std.tag = "AverageSymmetricPointDistanceStd_in_mm"
-                #average point distances
-                summary_value_transformed_mean = summary.value.add()
-                summary_value_transformed_mean.simple_value = self.mean_transformed_mean
-                summary_value_transformed_mean.tag = "AveragePointDistanceMean_in_mm"
-                summary_value_transformed_std = summary.value.add()
-                summary_value_transformed_std.simple_value = self.mean_transformed_std
-                summary_value_transformed_std.tag = "AveragePointDistanceStd_in_mm"
-                #average point distances
-                summary_value_mixed_transformed_mean = summary.value.add()
-                summary_value_mixed_transformed_mean.simple_value = self.mean_mixed_transformed_mean
-                summary_value_mixed_transformed_mean.tag = "MixedAveragePointDistanceMean_in_mm"
-                summary_value_mixed_transformed_std = summary.value.add()
-                summary_value_mixed_transformed_std.simple_value = self.mean_mixed_transformed_std
-                summary_value_mixed_transformed_std.tag = "MixedAveragePointDistanceStd_in_mm"
-                
-                self.tensorboard.writer.add_summary(summary, epoch)
-            else:
+            with self.tensorboard.as_default():
                 tf.summary.scalar('mAP', self.mean_ap, epoch)
                 tf.summary.scalar("ADD", self.mean_add, epoch)
                 tf.summary.scalar("ADD-S", self.mean_add_s, epoch)

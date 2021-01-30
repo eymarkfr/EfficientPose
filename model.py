@@ -53,8 +53,8 @@ import numpy as np
 import sys
 from absl import flags
 
-MOMENTUM = 0.997
-EPSILON = 1e-4
+MOMENTUM = 0.9 #0.997
+EPSILON = 1e-3 #1e-4
 
 flags.DEFINE_bool("use_groupnorm", False, "Wether or not to use GroupNorm. Note that GroupNorm currently does not support mobile GPU")
 FLAGS = flags.FLAGS 
@@ -185,7 +185,7 @@ def build_EfficientPose(phi,
         print_models(efficientpose_train, box_net, class_net, rotation_net, translation_net)
         
     #create list with all layers to be able to load all layer weights because sometimes the whole subnet weight loading is skipped if the output shape does not match instead of skipping just the output layer
-    all_layers = list(set(efficientpose_train.layers + box_net.layers + class_net.layers + rotation_net.layers + translation_net.layers))
+    all_layers = None #list(set(efficientpose_train.layers + box_net.layers + class_net.layers + rotation_net.layers + translation_net.layers))
     # all_layers = None 
     # efficientpose_prediction = None
     return efficientpose_train, efficientpose_prediction, all_layers
@@ -544,17 +544,16 @@ class BoxNet(models.Model):
         self.reshapes = [StaticReshape(self.num_values, name=f"box_reshape_{i+1}") for i in range(5)] 
         self.level = 0
 
-    def call(self, inputs, **kwargs):
-        feature, level = inputs
+    def call(self, feature, level, **kwargs):
         for i in range(self.depth):
             feature = self.convs[i](feature)
-            feature = self.bns[i][self.level](feature)
+            feature = self.bns[i][level](feature)
             feature = self.activation(feature)
         outputs = self.head(feature)
         #outputs = self.reshape(outputs)
-        outputs = self.reshapes[self.level](outputs)
-        self.level += 1
-        self.level = self.level % 5
+        outputs = self.reshapes[level](outputs)
+        #self.level += 1
+        # self.level = self.level % 5
         return outputs
 
 class ClassNet(models.Model):
@@ -589,18 +588,17 @@ class ClassNet(models.Model):
         self.activation_sigmoid = layers.Activation('sigmoid') # if not lite else layers.Lambda(lambda x: tf.nn.relu6(x))
         self.level = 0
 
-    def call(self, inputs, **kwargs):
-        feature, level = inputs
+    def call(self, feature, level, **kwargs):
         for i in range(self.depth):
             feature = self.convs[i](feature)
-            feature = self.bns[i][self.level](feature)
+            feature = self.bns[i][level](feature)
             feature = self.activation(feature)
         outputs = self.head(feature)
         #outputs = self.reshape(outputs)
-        outputs = self.reshapes[self.level](outputs)
+        outputs = self.reshapes[level](outputs)
         outputs = self.activation_sigmoid(outputs)
-        self.level += 1
-        self.level = self.level % 5
+        #self.level += 1
+        # self.level = self.level % 5
         return outputs
     
     
@@ -634,7 +632,7 @@ class IterativeRotationSubNet(models.Model):
         options.update(kernel_initializer)
         self.convs = [layers.SeparableConv2D(filters = width, name = f'{self.name}/iterative-rotation-sub-{i}', **options) for i in range(self.depth)]
         self.head = layers.SeparableConv2D(filters = self.num_anchors * self.num_values, name = f'{self.name}/iterative-rotation-sub-predict', **options)
-        
+
         if self.use_group_norm:
             self.norm_layer = [[[GroupNormalization(groups = self.num_groups_gn, axis = gn_channel_axis, name = f'{self.name}/iterative-rotation-sub-{k}-{i}-gn-{j}') for j in range(3, 8)] for i in range(self.depth)] for k in range(self.num_iteration_steps)]
         else: 
@@ -645,9 +643,7 @@ class IterativeRotationSubNet(models.Model):
         else: 
             self.activation = layers.Lambda(lambda x: tf.nn.swish(x))
 
-    def call(self, inputs, **kwargs):
-        feature, level = inputs
-        level_py = kwargs["level_py"]
+    def call(self, feature, level_py, **kwargs):
         iter_step_py = kwargs["iter_step_py"]
         for i in range(self.depth):
             feature = self.convs[i](feature)
@@ -716,24 +712,23 @@ class RotationNet(models.Model):
         self.add = layers.Add()
         self.concat = layers.Concatenate(axis = channel_axis)
 
-    def call(self, inputs, **kwargs):
-        feature, level = inputs
+    def call(self, feature, level, **kwargs):
         for i in range(self.depth):
             feature = self.convs[i](feature)
-            feature = self.norm_layer[i][self.level](feature)
+            feature = self.norm_layer[i][level](feature)
             feature = self.activation(feature)
             
         rotation = self.initial_rotation(feature)
         
         for i in range(self.num_iteration_steps):
             iterative_input = self.concat([feature, rotation])
-            delta_rotation = self.iterative_submodel([iterative_input, level], level_py = self.level, iter_step_py = i)
+            delta_rotation = self.iterative_submodel(iterative_input, level, iter_step_py = i)
             rotation = self.add([rotation, delta_rotation])
         
         #outputs = self.reshape(rotation)
-        outputs = self.reshapes[self.level](rotation)
-        self.level += 1
-        self.level = self.level % 5
+        outputs = self.reshapes[level](rotation)
+        #self.level += 1
+        # self.level = self.level % 5
         return outputs
     
     
@@ -779,13 +774,12 @@ class IterativeTranslationSubNet(models.Model):
             self.activation = layers.Lambda(lambda x: tf.nn.swish(x))
 
 
-    def call(self, inputs, **kwargs):
-        feature, level = inputs
-        level_py = kwargs["level_py"]
+    def call(self, feature, level, **kwargs):
+        #level_py = kwargs["level_py"]
         iter_step_py = kwargs["iter_step_py"]
         for i in range(self.depth):
             feature = self.convs[i](feature)
-            feature = self.norm_layer[iter_step_py][i][level_py](feature)
+            feature = self.norm_layer[iter_step_py][i][level](feature)
             feature = self.activation(feature)
         outputs_xy = self.head_xy(feature)
         outputs_z = self.head_z(feature)
@@ -855,11 +849,10 @@ class TranslationNet(models.Model):
             
         self.concat_output = layers.Concatenate(axis = -1) #always last axis after reshape
 
-    def call(self, inputs, **kwargs):
-        feature, level = inputs
+    def call(self, feature, level, **kwargs):
         for i in range(self.depth):
             feature = self.convs[i](feature)
-            feature = self.norm_layer[i][self.level](feature)
+            feature = self.norm_layer[i][level](feature)
             feature = self.activation(feature)
             
         translation_xy = self.initial_translation_xy(feature)
@@ -867,17 +860,17 @@ class TranslationNet(models.Model):
         
         for i in range(self.num_iteration_steps):
             iterative_input = self.concat([feature, translation_xy, translation_z])
-            delta_translation_xy, delta_translation_z = self.iterative_submodel([iterative_input, level], level_py = self.level, iter_step_py = i)
+            delta_translation_xy, delta_translation_z = self.iterative_submodel(iterative_input, level, iter_step_py = i)
             translation_xy = self.add([translation_xy, delta_translation_xy])
             translation_z = self.add([translation_z, delta_translation_z])
         
         #outputs_xy = self.reshape_xy(translation_xy)
         #outputs_z = self.reshape_z(translation_z)
-        outputs_xy = self.reshapes_xy[self.level](translation_xy)
-        outputs_z = self.reshapes_z[self.level](translation_z)
+        outputs_xy = self.reshapes_xy[level](translation_xy)
+        outputs_z = self.reshapes_z[level](translation_z)
         outputs = self.concat_output([outputs_xy, outputs_z])
-        self.level += 1
-        self.level = self.level % 5
+        #self.level += 1
+        # self.level = self.level % 5
         return outputs
     
 class StaticExpandDims(tf.keras.layers.Layer):
@@ -907,16 +900,16 @@ def apply_subnets_to_feature_maps(box_net, class_net, rotation_net, translation_
                        Rotation and Translation are concatenated because the Keras Loss function takes only one GT and prediction tensor respectively as input but the transformation loss needs both
        bboxes: Tensor containing the 2D bounding boxes for all anchor boxes. Shape (batch_size, num_anchor_boxes, 4)
     """
-    classification = [class_net([feature, i]) for i, feature in enumerate(fpn_feature_maps)]
+    classification = [class_net(feature, i) for i, feature in enumerate(fpn_feature_maps)]
     classification = layers.Concatenate(axis=1, name='classification')(classification)
     
-    bbox_regression = [box_net([feature, i]) for i, feature in enumerate(fpn_feature_maps)]
+    bbox_regression = [box_net(feature, i) for i, feature in enumerate(fpn_feature_maps)]
     bbox_regression = layers.Concatenate(axis=1, name='regression')(bbox_regression)
     
-    rotation = [rotation_net([feature, i]) for i, feature in enumerate(fpn_feature_maps)]
+    rotation = [rotation_net(feature, i) for i, feature in enumerate(fpn_feature_maps)]
     rotation = layers.Concatenate(axis = 1, name='rotation')(rotation)
     
-    translation_raw = [translation_net([feature, i]) for i, feature in enumerate(fpn_feature_maps)]
+    translation_raw = [translation_net(feature, i) for i, feature in enumerate(fpn_feature_maps)]
     translation_raw = layers.Concatenate(axis = 1, name='translation_raw_outputs')(translation_raw)
     
     #get anchors and apply predicted translation offsets to translation anchors
@@ -938,7 +931,7 @@ def apply_subnets_to_feature_maps(box_net, class_net, rotation_net, translation_
     #bboxes = bbox_regression
     #bboxes = bbox_regression[..., :4]
     bboxes = RegressBoxes(name='boxes')(bbox_regression, anchors_input)
-    #bboxes = ClipBoxes(name='clipped_boxes')(bboxes, image_input_shape[0], image_input_shape[1])
+    bboxes = ClipBoxes(name='clipped_boxes')(bboxes, image_input_shape[0], image_input_shape[1])
     
     #concat rotation and translation outputs to transformation output to have a single output for transformation loss calculation
     #standard concatenate layer throws error that shapes does not match because translation shape dim 2 is known via translation_anchors and rotation shape dim 2 is None

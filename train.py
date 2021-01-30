@@ -43,7 +43,8 @@ import sys
 
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.optimizers import Adam, SGD
+from utils.weight_loader import load_weights_rec
 
 from model import build_EfficientPose
 from losses import smooth_l1, focal, transformation_loss
@@ -79,6 +80,8 @@ flags.DEFINE_bool("multiprocessing", False, "Use multiprocessing in fit_generato
 flags.DEFINE_integer("workers", 4, "Number of generator workers.")
 flags.DEFINE_integer("max_queue_size", 10, 'Queue length for multiprocessing workers in fit_generator.')
 flags.DEFINE_bool("no_se", False, "Wether or not to remove SE step.")
+flags.DEFINE_enum("optimizer", "sgd", ["adam", "sgd"], "Help which optimizer to use")
+flags.DEFINE_float("momentum", 0.9, "Momentum for SGD")
 
 
 
@@ -130,7 +133,7 @@ def train(args):
             model.load_weights(weights_path, by_name=True)
         else:
             print('Loading model, this may take a second...')
-            custom_load_weights(filepath = args.weights, layers = all_layers, skip_mismatch = True)
+            load_weights_rec(model, args.weights)
             print("\nDone!")
 
     # freeze backbone layers
@@ -138,9 +141,15 @@ def train(args):
         # 227, 329, 329, 374, 464, 566, 656
         for i in range(1, [227, 329, 329, 374, 464, 566, 656][args.phi]):
             model.layers[i].trainable = False
-
+    # get optimizer
+    if args.optimizer == "adam":
+        optimizer = Adam(lr = args.lr) #, clipnorm = 0.001)
+    else:
+        if args.optimizer != "sgd":
+            print(f"Optimizer {args.optimizer} not supported. Defaulting to SGD")
+        optimizer = SGD(args.lr, args.momentum)
     # compile model
-    model.compile(optimizer=Adam(lr = args.lr, clipnorm = 0.001), 
+    model.compile(optimizer=optimizer, 
                   loss={'regression': smooth_l1(),
                         'classification': focal(),
                         'transformation': transformation_loss(model_3d_points_np = train_generator.get_all_3d_model_points_array_for_loss(),
@@ -208,6 +217,7 @@ def create_callbacks(training_model, prediction_model, validation_generator, arg
 
     tensorboard_callback = None
     tensorboard_dir = None
+    tb_writer = None
     
     if args.dataset_type == "linemod":
         snapshot_path = os.path.join(args.snapshot_path, "object_" + str(args.object_id))
@@ -255,10 +265,11 @@ def create_callbacks(training_model, prediction_model, validation_generator, arg
             embeddings_metadata = None
         )
         callbacks.append(tensorboard_callback)
+        tb_writer = tf.summary.create_file_writer(tensorboard_dir)
 
     if args.evaluation and validation_generator:
         from eval.eval_callback import Evaluate
-        evaluation = Evaluate(validation_generator, prediction_model, tensorboard = tensorboard_callback, save_path = save_path)
+        evaluation = Evaluate(validation_generator, prediction_model, tensorboard = tb_writer, save_path = save_path)
         callbacks.append(evaluation)
 
     # save the model
@@ -273,17 +284,20 @@ def create_callbacks(training_model, prediction_model, validation_generator, arg
                                                      mode = "min")
         callbacks.append(checkpoint)
 
-    callbacks.append(keras.callbacks.ReduceLROnPlateau(
-        monitor    = 'MixedAveragePointDistanceMean_in_mm',
-        factor     = 0.5,
-        patience   = 25,
-        verbose    = 1,
-        mode       = 'min',
-        min_delta  = 0.0001,
-        cooldown   = 0,
-        min_lr     = 1e-7
-    ))
-
+    # callbacks.append(keras.callbacks.ReduceLROnPlateau(
+    #     monitor    = 'MixedAveragePointDistanceMean_in_mm',
+    #     factor     = 0.5,
+    #     patience   = 12,
+    #     verbose    = 1,
+    #     mode       = 'min',
+    #     min_delta  = 0.0001,
+    #     cooldown   = 0,
+    #     min_lr     = 1e-7
+    # ))
+    def lr_schedule(epoch, lr): 
+        return lr*0.96
+    learning_rate_cb = tf.keras.callbacks.LearningRateScheduler(lr_schedule)
+    callbacks.append(learning_rate_cb)
     return callbacks
 
 
