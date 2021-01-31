@@ -39,6 +39,9 @@ limitations under the License.
 
 import argparse
 import os
+
+from tensorflow.python.ops.gen_array_ops import shape
+os.environ["CUDA_VISIBLE_DEVICES"]="-1"    
 import sys
 
 import tensorflow as tf
@@ -48,8 +51,9 @@ from eval.common import evaluate
 from generators.linemod import LineModGenerator
 from generators.occlusion import OcclusionGenerator
 from absl import flags, app
-from utils.weight_loader import load_weights_rec
-
+from utils.weight_loader import load_weights_rec, freeze_bn
+import layers
+import numpy as np
     
 flags.DEFINE_enum("rotation_representation", 'axis_angle', ['axis_angle', 'rotation_matrix', 'quaternion'], 'Which representation of the rotation should be used')
 flags.DEFINE_string("weights", None, 'File containing weights to init the model parameter. Can be either a path or "imagenet"')
@@ -62,9 +66,44 @@ flags.DEFINE_bool("lite", False, "Wether or not to apply the lite modifications 
 flags.DEFINE_enum("dataset_type", "linemod", ["linemod", "occlusion"], "Which dataset to use.")
 flags.DEFINE_bool("no_se", False, "Wether or not to remove SE step.")
 flags.DEFINE_bool("freeze_bn", False, 'Freeze training of BatchNormalization layers.')
+flags.DEFINE_bool("is_tflite", False, "Wether the loaded model is tflite")
 
 def main(argv):
     run_eval(flags.FLAGS)
+
+class TfliteWrapper:
+    def __init__(self, tflite_model, score_threshold) -> None:
+        self.interpreter = tf.lite.Interpreter(tflite_model, num_threads=4)
+        self.interpreter.allocate_tensors() 
+        self.inputs = [self.interpreter.get_input_details()[i]['index'] for i in range(2)]
+        self.outputs = [self.interpreter.tensor(self.interpreter.get_output_details()[i]['index']) for i in range(4)]
+        print([self.interpreter.get_output_details()[i]['dtype'] for i in range(4)])
+        post_inputs=[
+            tf.keras.layers.Input(shape=(None, 4)),
+            tf.keras.layers.Input(shape=(None, 1)),
+            tf.keras.layers.Input(shape=(None, 3)),
+            tf.keras.layers.Input(shape=(None, 3))
+        ]
+        op = layers.FilterDetections(num_rotation_parameters=3, nms_threshold=score_threshold)([post_inputs[0], post_inputs[1], post_inputs[2], post_inputs[3]])
+        self.postprocess = tf.keras.Model(inputs=post_inputs, outputs=op)
+    
+    def __call__(self, data):
+        #image, fx, fy, px, py, tz_scale, image_scale = inputs 
+        for i in range(2):
+            self.interpreter.set_tensor(self.inputs[i], data[i])
+        self.interpreter.invoke()
+        return self.postprocess([o() for o in self.outputs])
+    
+    def predict_on_batch(self, data):
+        images, params = data 
+        n = images.shape[0]
+        results = []
+        for i in range(n):
+            v = [images[i:i+1, ...]]
+            v += [params[i:i+1, ...] for k in range(1)]
+            results.append(self(v))
+        return [r.numpy() for r in results[0]]
+
 
 def run_eval(args):
     """
@@ -90,19 +129,24 @@ def run_eval(args):
     num_anchors = generator.num_anchors
 
     print("\nBuilding the Model...")
-    nlub, prediction_model, _ = build_EfficientPose(args.phi,
-                                                 num_classes = num_classes,
-                                                 num_anchors = num_anchors,
-                                                 freeze_bn = args.freeze_bn,
-                                                 score_threshold = args.score_threshold,
-                                                 num_rotation_parameters = num_rotation_parameters,
-                                                 print_architecture = False,
-                                                 lite = args.lite,
-                                                 no_se = args.no_se)
-    print("Done!")
-    # load pretrained weights
-    print('Loading model, this may take a second...')
-    load_weights_rec(prediction_model, args.weights)
+    if args.is_tflite:
+        prediction_model = TfliteWrapper(args.weights, args.score_threshold)
+    else:
+        nlub, prediction_model, _, _ = build_EfficientPose(args.phi,
+                                                    num_classes = num_classes,
+                                                    num_anchors = num_anchors,
+                                                    freeze_bn = False,
+                                                    score_threshold = args.score_threshold,
+                                                    num_rotation_parameters = num_rotation_parameters,
+                                                    print_architecture = False,
+                                                    lite = args.lite,
+                                                    no_se = args.no_se)
+        print("Done!")
+        # load pretrained weights
+        print('Loading model, this may take a second...')
+        load_weights_rec(prediction_model, args.weights, skip_mismatch=False)
+        if args.freeze_bn:
+            freeze_bn(prediction_model)
     evaluate_model(prediction_model, generator, args.validation_image_save_path, args.score_threshold)
     
     

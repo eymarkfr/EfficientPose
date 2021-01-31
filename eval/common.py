@@ -109,7 +109,8 @@ def _get_detections(generator, model, score_threshold = 0.05, max_detections = 1
 
         # run network
         boxes, scores, labels, rotations, translations = model.predict_on_batch([np.expand_dims(image, axis=0), np.expand_dims(camera_input, axis=0)])[:5]
-        
+        #print([r for r in [boxes, scores, labels, rotations, translations]])
+        #raise Exception("sdaf")
         if tf.version.VERSION >= '2.0.0':
             boxes = boxes
             scores = scores

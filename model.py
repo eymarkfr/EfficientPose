@@ -49,6 +49,7 @@ from tfkeras import EfficientNetB0, EfficientNetB1, EfficientNetB2, EfficientNet
 from layers import ClipBoxes, RegressBoxes, FilterDetections, wBiFPNAdd, BatchNormalization, RegressTranslation, CalculateTxTy, GroupNormalization
 from initializers import PriorProbability
 from utils.anchors import anchors_for_shape
+from utils import weight_loader
 import numpy as np
 import sys
 from absl import flags
@@ -155,40 +156,30 @@ def build_EfficientPose(phi,
                                                                                                                    image_scale_in,
                                                                                                                    for_converter)
     
-    if for_converter:
-        #get the EfficientPose model for training without NMS and the rotation and translation output combined in the transformation output because of the loss calculation
-        efficientpose_train = models.Model(inputs = [image_input, fx_in, fy_in, px_in, py_in, tz_scale_in, image_scale_in], outputs = [bboxes, classification, bbox_regression, transformation], name = 'efficientpose')
+    #get the EfficientPose model for training without NMS and the rotation and translation output combined in the transformation output because of the loss calculation
+    efficientpose_tflite = models.Model(inputs = [image_input, camera_parameters_input], outputs = [bboxes, classification, rotation, translation], name = 'efficientpose')
 
-        # filter detections (apply NMS / score threshold / select top-k)
-        filtered_detections = FilterDetections(num_rotation_parameters = num_rotation_parameters,
-                                            num_translation_parameters = 3,
-                                            name = 'filtered_detections',
-                                            score_threshold = score_threshold,
-                                            for_converter = for_converter
-                                            )([bboxes, classification, rotation, translation])
+    #get the EfficientPose model for training without NMS and the rotation and translation output combined in the transformation output because of the loss calculation
+    efficientpose_train = models.Model(inputs = [image_input, camera_parameters_input], outputs = [classification, bbox_regression, transformation], name = 'efficientpose')
 
-        efficientpose_prediction = models.Model(inputs = [image_input, fx_in, fy_in, px_in, py_in, tz_scale_in, image_scale_in], outputs = filtered_detections, name = 'efficientpose_prediction')
-    else:
-        #get the EfficientPose model for training without NMS and the rotation and translation output combined in the transformation output because of the loss calculation
-        efficientpose_train = models.Model(inputs = [image_input, camera_parameters_input], outputs = [classification, bbox_regression, transformation], name = 'efficientpose')
+    # filter detections (apply NMS / score threshold / select top-k)
+    filtered_detections = FilterDetections(num_rotation_parameters = num_rotation_parameters,
+                                        num_translation_parameters = 3,
+                                        name = 'filtered_detections',
+                                        score_threshold = score_threshold
+                                        )(efficientpose_tflite([image_input, camera_parameters_input]))
 
-        # filter detections (apply NMS / score threshold / select top-k)
-        filtered_detections = FilterDetections(num_rotation_parameters = num_rotation_parameters,
-                                            num_translation_parameters = 3,
-                                            name = 'filtered_detections',
-                                            score_threshold = score_threshold
-                                            )([bboxes, classification, rotation, translation])
-
-        efficientpose_prediction = models.Model(inputs = [image_input, camera_parameters_input], outputs = filtered_detections, name = 'efficientpose_prediction')
-    
+    #efficientpose_prediction = models.Model(inputs = [image_input, camera_parameters_input], outputs = filtered_detections, name = 'efficientpose_prediction')
+    efficientpose_prediction = models.Model(inputs = [image_input, camera_parameters_input], outputs = filtered_detections)
     if print_architecture:
         print_models(efficientpose_train, box_net, class_net, rotation_net, translation_net)
         
     #create list with all layers to be able to load all layer weights because sometimes the whole subnet weight loading is skipped if the output shape does not match instead of skipping just the output layer
-    all_layers = None #list(set(efficientpose_train.layers + box_net.layers + class_net.layers + rotation_net.layers + translation_net.layers))
+    all_layers = list(set(
+        weight_loader.get_all_layers(efficientpose_train) + weight_loader.get_all_layers(box_net) + weight_loader.get_all_layers(class_net) + weight_loader.get_all_layers(rotation_net) + weight_loader.get_all_layers(translation_net)))
     # all_layers = None 
     # efficientpose_prediction = None
-    return efficientpose_train, efficientpose_prediction, all_layers
+    return efficientpose_train, efficientpose_prediction, all_layers, efficientpose_tflite
 
 
 def get_scaled_parameters(phi):
@@ -931,7 +922,7 @@ def apply_subnets_to_feature_maps(box_net, class_net, rotation_net, translation_
     #bboxes = bbox_regression
     #bboxes = bbox_regression[..., :4]
     bboxes = RegressBoxes(name='boxes')(bbox_regression, anchors_input)
-    bboxes = ClipBoxes(name='clipped_boxes')(bboxes, image_input_shape[0], image_input_shape[1])
+    #bboxes = ClipBoxes(name='clipped_boxes')(bboxes, image_input_shape[0], image_input_shape[1])
     
     #concat rotation and translation outputs to transformation output to have a single output for transformation loss calculation
     #standard concatenate layer throws error that shapes does not match because translation shape dim 2 is known via translation_anchors and rotation shape dim 2 is None
