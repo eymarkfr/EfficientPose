@@ -121,7 +121,7 @@ def train(args):
                                     num_rotation_parameters = num_rotation_parameters,
                                     lite = args.lite,
                                     no_se = args.no_se,
-                                    build_EfficientPose = args.build_EfficientPose)
+                                    use_groupnorm = args.use_groupnorm)
     #model, prediction_model, _ = model.get_models()
     model, prediction_model, _, _ = model
     print("Done!")
