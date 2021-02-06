@@ -11,12 +11,14 @@ if gpus:
             tf.config.experimental.set_memory_growth(gpu, True)
     except RuntimeError as e:
         print(e)
-import model
+#import model
+import model_clean
 from utils import weight_loader
 import custom_load_weights
 from generators.linemod import LineModGenerator
 from generators.occlusion import OcclusionGenerator
 from losses import smooth_l1, focal, transformation_loss
+import tfkeras
 
 from absl import flags, app 
 
@@ -40,21 +42,27 @@ flags.DEFINE_bool("use_6dof_augmentation", True, "Wether or not to use 6dof augm
 
 def convert(args):
   rot_parameters = {"axis_angle": 3, "rotation_matrix": 9, "quaternion": 4}
-  prediction_model, _, all_layers, tflite_raw_model = model.build_EfficientPose(args.phi,
+  model = model_clean.EfficientPose(args.phi,
                                                   num_classes = args.num_classes,
                                                   num_anchors = args.num_anchors,
                                                   freeze_bn = False,
                                                   score_threshold = args.score_threshold,
                                                   num_rotation_parameters = rot_parameters[args.rotation_representation],
                                                   lite = args.lite,
-                                                  for_converter=False,
-                                                  batch_size=None,
                                                   no_se=args.no_se) 
 
+  prediction_model, pred_model, tflite_raw_model = model.get_models()
+  tflite_raw_model([tf.random.normal((1,512,512,3)), tf.random.normal((1,6))])
+  prediction_model([tf.random.normal((1,512,512,3)), tf.random.normal((1,6))])
+  pred_model([tf.random.normal((1,512,512,3)), tf.random.normal((1,6))])
+  inp = tf.keras.layers.Input((512,512,3), dtype=tf.uint8)
+  inp2 = tf.keras.layers.Input((6,))
 
-  weight_loader.load_weights_rec(prediction_model, args.weights)
+  tflite_raw_model = tfkeras.EfficientNetB0(input_tensor=preprocess_image(inp))
+  tflite_raw_model = tf.keras.Model(inputs=[inp, inp2], outputs=tflite_raw_model)
+  weight_loader.load_weights_rec(tflite_raw_model, args.weights)
   if args.freeze_bn:
-    weight_loader.freeze_bn(prediction_model)
+    weight_loader.freeze_bn(tflite_raw_model)
 
   if args.q_aware:
     gen, val = create_generators(args)
@@ -76,6 +84,8 @@ def convert(args):
         validation_data = val
     )
 
+  #tflite_raw_model.save("models/model.h5")
+  tflite_raw_model([tf.random.normal((1,512,512,3)), tf.random.normal((1,6))])
   converter = tf.lite.TFLiteConverter.from_keras_model(tflite_raw_model)
   converter.experimental_new_converter = True
   converter.target_spec.supported_ops = [

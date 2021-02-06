@@ -47,10 +47,12 @@ from tensorflow.keras.optimizers import Adam, SGD
 from utils.weight_loader import load_weights_rec
 
 from model import build_EfficientPose
+#import model_clean
 from losses import smooth_l1, focal, transformation_loss
 from efficientnet import BASE_WEIGHTS_PATH, WEIGHTS_HASHES
 
 from custom_load_weights import custom_load_weights
+from generators.linemod import LineModGenerator
 
 from absl import flags, app
 
@@ -111,14 +113,16 @@ def train(args):
     #     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 
     print("\nBuilding the Model...")
-    model, prediction_model, all_layers = build_EfficientPose(args.phi,
-                                                              num_classes = num_classes,
-                                                              num_anchors = num_anchors,
-                                                              freeze_bn = args.freeze_bn,
-                                                              score_threshold = args.score_threshold,
-                                                              num_rotation_parameters = num_rotation_parameters,
-                                                              lite = args.lite,
-                                                              no_se = args.no_se)
+    model = build_EfficientPose(args.phi,
+                                    num_classes = num_classes,
+                                    num_anchors = num_anchors,
+                                    freeze_bn = args.freeze_bn,
+                                    score_threshold = args.score_threshold,
+                                    num_rotation_parameters = num_rotation_parameters,
+                                    lite = args.lite,
+                                    no_se = args.no_se)
+    #model, prediction_model, _ = model.get_models()
+    model, prediction_model, _, _ = model
     print("Done!")
     # load pretrained weights
     if args.weights:
@@ -313,10 +317,10 @@ def create_generators(args):
     common_args = {
         'batch_size': args.batch_size,
         'phi': args.phi,
+        'image_extension': args.image_extension
     }
 
     if args.dataset_type == 'linemod':
-        from generators.linemod import LineModGenerator
         train_generator = LineModGenerator(
             args.linemod_path,
             args.object_id,

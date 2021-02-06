@@ -71,6 +71,8 @@ class wBiFPNAdd(keras.layers.Layer):
                                  initializer=keras.initializers.constant(1 / num_in),
                                  trainable=True,
                                  dtype=tf.float32)
+        self.built = True
+        return super().build(input_shape)
 
     def call(self, inputs, **kwargs):
         w = keras.activations.relu(self.w)
@@ -210,6 +212,7 @@ class RegressTranslation(keras.layers.Layer):
 class StaticAddAxis(keras.layers.Layer):
     def build(self, input_shape):
         self.needs_axis = len(input_shape) != 2
+        self.built = True
         return super().build(input_shape)
     
     def call(self, inputs, **kwargs):

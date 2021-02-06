@@ -1,5 +1,5 @@
 import tensorflow as tf
-def load_weights_rec(entry, weight_path, depth=0, max_depth=5, skip_mismatch=False):
+def load_weights_rec(entry, weight_path, depth=0, max_depth=10, skip_mismatch=False):
     if max_depth == depth:
         print("Max depth reached")
         return
@@ -7,6 +7,7 @@ def load_weights_rec(entry, weight_path, depth=0, max_depth=5, skip_mismatch=Fal
     if hasattr(entry, "load_weights"):
         entry.load_weights(weight_path, by_name=True, skip_mismatch=skip_mismatch)
     if hasattr(entry, "layers"):
+        print(entry.name)
         for l in entry.layers:
             load_weights_rec(l, weight_path, depth+1, max_depth, skip_mismatch=skip_mismatch)
 

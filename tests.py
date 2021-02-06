@@ -54,6 +54,7 @@ from absl import flags, app
 from utils.weight_loader import load_weights_rec
 import layers
 import numpy as np
+import tfkeras
     
 flags.DEFINE_enum("rotation_representation", 'axis_angle', ['axis_angle', 'rotation_matrix', 'quaternion'], 'Which representation of the rotation should be used')
 flags.DEFINE_string("weights", None, 'File containing weights to init the model parameter. Can be either a path or "imagenet"')
@@ -96,13 +97,17 @@ class TfliteWrapper:
     
     def predict_on_batch(self, data):
         images, params = data 
+        images = images * [0.229, 0.224, 0.225]
+        images += [0.485, 0.456, 0.406]
+        images *= 255 
+        images = tf.cast(images, tf.uint8)
         n = images.shape[0]
         results = []
         for i in range(n):
             v = [images[i:i+1, ...]]
             v += [params[i:i+1, ...] for k in range(1)]
             results.append(self(v))
-        return [r.numpy() for r in results[0]]
+        return [r for r in results[0]]
 
 
 def run_eval(args):
@@ -139,6 +144,10 @@ def run_eval(args):
                                                 print_architecture = False,
                                                 lite = args.lite,
                                                 no_se = args.no_se)
+    # inp = tf.keras.layers.Input((512,512,3))
+    # inp2 = tf.keras.layers.Input((6,))
+    # lite_model = tfkeras.EfficientNetB0(input_tensor=inp)
+    # lite_model = tf.keras.Model(inputs=[inp, inp2], outputs=lite_model)
     print("Done!")
     # load pretrained weights
     print('Loading model, this may take a second...')
@@ -146,11 +155,21 @@ def run_eval(args):
 
     for x, _ in generator:
         o1 = lite_model(x)
-        o2 = prediction_model(x)
-        print(x[0])
-        print(o1[1].shape, o2[1].shape)
-        print(o1[1].numpy(), o2[1])
-        print(np.linalg.norm(o1[1]-o2[1]))
+        o2 = prediction_model.predict_on_batch(x)
+        # print(x[0])
+        # print(o1[1].shape, o2[1].shape)
+        # print(o1[1].numpy(), o2[1])
+        # print(np.allclose(o1[1], o2[1], rtol=0.1, atol=0.1))
+        a = o1[0]
+        b = o2[0]
+        a = a.numpy().flatten()
+        b = b.flatten()
+        print(a.shape)
+        print(b.shape)
+        for i in range(a.size):
+            print([a[i], b[i]])
+            if i > 100:
+                break
         break
     
     

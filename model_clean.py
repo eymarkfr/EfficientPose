@@ -1,42 +1,3 @@
-"""
-EfficientPose (c) by Steinbeis GmbH & Co. KG für Technologietransfer
-Haus der Wirtschaft, Willi-Bleicher-Straße 19, 70174 Stuttgart, Germany
-Yannick Bukschat: yannick.bukschat@stw.de
-Marcus Vetter: marcus.vetter@stw.de
-
-EfficientPose is licensed under a
-Creative Commons Attribution-NonCommercial 4.0 International License.
-
-The license can be found in the LICENSE file in the root directory of this source tree
-or at http://creativecommons.org/licenses/by-nc/4.0/.
----------------------------------------------------------------------------------------------------------------------------------
----------------------------------------------------------------------------------------------------------------------------------
-
-Based on:
-
-Keras EfficientDet implementation (https://github.com/xuannianz/EfficientDet) licensed under the Apache License, Version 2.0
----------------------------------------------------------------------------------------------------------------------------------
-The official EfficientDet implementation (https://github.com/google/automl) licensed under the Apache License, Version 2.0
----------------------------------------------------------------------------------------------------------------------------------
-EfficientNet Keras implementation (https://github.com/qubvel/efficientnet) licensed under the Apache License, Version 2.0
----------------------------------------------------------------------------------------------------------------------------------
-Keras RetinaNet implementation (https://github.com/fizyr/keras-retinanet) licensed under
-    
-Copyright 2017-2018 Fizyr (https://fizyr.com)
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-"""
-
 from functools import reduce
 
 import tensorflow as tf
@@ -61,127 +22,109 @@ flags.DEFINE_bool("use_groupnorm", False, "Wether or not to use GroupNorm. Note 
 FLAGS = flags.FLAGS 
 
 
-def build_EfficientPose(phi,
-                        num_classes = 8,
-                        num_anchors = 9,
-                        freeze_bn = False,
-                        score_threshold = 0.5,
-                        anchor_parameters = None,
-                        num_rotation_parameters = 3,
-                        print_architecture = False,
-                        lite = False,
-                        no_se = False,
-                        for_converter = False,
-                        batch_size = None):
-    """
-    Builds an EfficientPose model
-    Args:
-        phi: EfficientPose scaling hyperparameter phi
-        num_classes: Number of classes,
-        num_anchors: The number of anchors, usually 3 scales and 3 aspect ratios resulting in 3 * 3 = 9 anchors
-        freeze_bn: Boolean indicating if the batch norm layers should be freezed during training or not.
-        score_threshold: Minimum score threshold at which a prediction is not filtered out
-        anchor_parameters: Struct containing anchor parameters. If None, default values are used.
-        num_rotation_parameters: Number of rotation parameters, e.g. 3 for axis angle representation
-        print_architecture: Boolean indicating if the model architecture should be printed or not
-    
-    Returns:
-        efficientpose_train: EfficientPose model without NMS used for training
-        efficientpose_prediction: EfficientPose model including NMS used for evaluating and inferencing
-        all_layers: List of all layers in the EfficientPose model to load weights. Otherwise it can happen that a subnet is considered as a single unit when loading weights and if the output dimension doesn't match with the weight file, the whole subnet weight loading is skipped
-    """
-
-    #select parameters according to the given phi
+class EfficientPose(tf.keras.Model):
+  def __init__(self, phi,
+                    num_classes = 8,
+                    num_anchors = 9,
+                    freeze_bn = False,
+                    score_threshold = 0.5,
+                    anchor_parameters = None,
+                    num_rotation_parameters = 3,
+                    print_architecture = False,
+                    lite = False,
+                    no_se = False,
+                    name="EfficientPose"):
+    super().__init__(name=name)
     assert phi in range(7)
     scaled_parameters = get_scaled_parameters(phi)
-    
-    input_size = scaled_parameters["input_size"]
-    input_shape = (input_size, input_size, 3)
-    bifpn_width = subnet_width = scaled_parameters["bifpn_width"]
-    bifpn_depth = scaled_parameters["bifpn_depth"]
-    subnet_depth = scaled_parameters["subnet_depth"]
-    subnet_num_iteration_steps = scaled_parameters["subnet_num_iteration_steps"]
-    num_groups_gn = scaled_parameters["num_groups_gn"]
-    backbone_class = scaled_parameters["backbone_class"]
-    
-    #input layers
-    image_input = layers.Input(input_shape, batch_size=batch_size)
-    if for_converter: # Doing so we overcome using strided slices, which are not supported
-        camera_parameters_input = None #camera parameters and image scale for calculating the translation vector from 2D x-, y-coordinates
-        fx_in = layers.Input((1,), name="fx", batch_size=batch_size)
-        fy_in = layers.Input((1,), name="fy", batch_size=batch_size)
-        px_in = layers.Input((1,), name="px", batch_size=batch_size)
-        py_in = layers.Input((1,), name="py", batch_size=batch_size)
-        tz_scale_in = layers.Input((1,), name="tz_scale", batch_size=batch_size)
-        image_scale_in = layers.Input((1,), name="image_scale", batch_size=batch_size)
-    else: 
-        camera_parameters_input = layers.Input((6,), batch_size=batch_size) #camera parameters and image scale for calculating the translation vector from 2D x-, y-coordinates
-        fx_in = camera_parameters_input[:, 0]
-        fy_in = camera_parameters_input[:, 1]
-        px_in = camera_parameters_input[:, 2]
-        py_in = camera_parameters_input[:, 3]
-        tz_scale_in = camera_parameters_input[:, 4]
-        image_scale_in = camera_parameters_input[:, 5]
-    #build EfficientNet backbone
-    backbone_feature_maps = backbone_class(input_tensor = image_input, freeze_bn = freeze_bn, lite = lite, include_top = False, no_se = no_se)
-    
-    #build BiFPN
-    fpn_feature_maps = build_BiFPN(backbone_feature_maps, bifpn_depth, bifpn_width, freeze_bn, lite)
-    
-    #build subnets
-    box_net, class_net, rotation_net, translation_net = build_subnets(num_classes,
-                                                                      subnet_width,
-                                                                      subnet_depth,
-                                                                      subnet_num_iteration_steps,
-                                                                      num_groups_gn,
+    self.input_size = scaled_parameters["input_size"]
+    self.bifpn_width = self.subnet_width = scaled_parameters["bifpn_width"]
+    self.bifpn_depth = scaled_parameters["bifpn_depth"]
+    self.subnet_depth = scaled_parameters["subnet_depth"]
+    self.subnet_num_iteration_steps = scaled_parameters["subnet_num_iteration_steps"]
+    self.num_groups_gn = scaled_parameters["num_groups_gn"]
+    self.backbone_class = scaled_parameters["backbone_class"]
+    self.score_threshold = score_threshold
+    self.num_rotation_parameters = num_rotation_parameters
+
+    inp = layers.Input((self.input_size, self.input_size, 3))
+    self.backbone = self.backbone_class(input_tensor = inp, freeze_bn = freeze_bn, lite = lite, include_top = False, no_se = no_se)
+    self.backbone = tf.keras.Model(inputs=inp, outputs=self.backbone)
+    self.bifpn = BiFPN(self.bifpn_depth, self.bifpn_width, freeze_bn=freeze_bn, lite=lite)
+
+    self.box_net, self.class_net, self.rotation_net, self.translation_net = build_subnets(num_classes,
+                                                                      self.subnet_width,
+                                                                      self.subnet_depth,
+                                                                      self.subnet_num_iteration_steps,
+                                                                      self.num_groups_gn,
                                                                       num_rotation_parameters,
                                                                       freeze_bn,
                                                                       num_anchors,
                                                                       lite)
+    anchors, translation_anchors = anchors_for_shape((self.input_size, self.input_size), anchor_params = anchor_parameters)
+    self.translation_anchors = tf.expand_dims(translation_anchors, 0)
+    self.anchors = tf.expand_dims(anchors, 0)
     
-    #apply subnets to feature maps
-    classification, bbox_regression, rotation, translation, transformation, bboxes = apply_subnets_to_feature_maps(box_net,
-                                                                                                                   class_net,
-                                                                                                                   rotation_net,
-                                                                                                                   translation_net,
-                                                                                                                   fpn_feature_maps,
-                                                                                                                   input_shape,
-                                                                                                                   input_size,
-                                                                                                                   anchor_parameters,
-                                                                                                                   fx_in, 
-                                                                                                                   fy_in,
-                                                                                                                   px_in,
-                                                                                                                   py_in,
-                                                                                                                   tz_scale_in,
-                                                                                                                   image_scale_in,
-                                                                                                                   for_converter)
-    
-    #get the EfficientPose model for training without NMS and the rotation and translation output combined in the transformation output because of the loss calculation
-    efficientpose_tflite = models.Model(inputs = [image_input, camera_parameters_input], outputs = [bboxes, classification, rotation, translation], name = 'efficientpose')
+    self.regress_translation = RegressTranslation(name="translation_regression")
+    self.calc_tx_ty = CalculateTxTy(name="translation")
+    self.regress_boxes = RegressBoxes(name="boxes")
+    self.concat_rot_trans = layers.Lambda(lambda input_list: tf.concat(input_list, axis = -1), name="transformation")
 
+  def call(self, inputs, training = False):
+    image, camera_parameters_input = inputs
+    fx = camera_parameters_input[:, 0]
+    fy = camera_parameters_input[:, 1]
+    px = camera_parameters_input[:, 2]
+    py = camera_parameters_input[:, 3]
+    tz_scale = camera_parameters_input[:, 4]
+    image_scale = camera_parameters_input[:, 5]
+
+    backbone_feature_maps = self.backbone(image)
+    fpn_feature_maps = self.bifpn(backbone_feature_maps)
+
+    classification = self.class_net(fpn_feature_maps)
+    bbox_regression = self.box_net(fpn_feature_maps)
+    rotation = self.rotation_net(fpn_feature_maps)
+    translation_raw = self.translation_net(fpn_feature_maps)
+
+    translation_xy_Tz = self.regress_translation([self.translation_anchors, translation_raw])
+    translation = self.calc_tx_ty(translation_xy_Tz,
+                                                        fx = fx,
+                                                        fy = fy,
+                                                        px = px,
+                                                        py = py,
+                                                        tz_scale = tz_scale,
+                                                        image_scale = image_scale,
+                                                        for_converter = False)
+    bboxes = self.regress_boxes(bbox_regression, self.anchors)
+    transformation = self.concat_rot_trans([rotation, translation])
+
+    return classification, bbox_regression, rotation, translation, transformation, bboxes, backbone_feature_maps
+    #return fpn_feature_maps
+
+  def get_models(self):
+    image_input = layers.Input((self.input_size, self.input_size, 3))
+    camera_parameters_input = layers.Input((6,))
+    classification, bbox_regression, rotation, translation, transformation, bboxes, backbone_feature_maps = self([image_input, camera_parameters_input])
+    #efficientpose_tflite = models.Model(inputs = [image_input, camera_parameters_input], outputs = [bboxes, classification, rotation, translation], name = 'efficientpose_lite')
+    efficientpose_tflite = models.Model(inputs = [image_input, camera_parameters_input], outputs = backbone_feature_maps, name = 'efficientpose_lite')
+
+    classification = tf.keras.layers.Layer(name="classification")(classification)
+    bbox_regression = tf.keras.layers.Layer(name="regression")(bbox_regression)
+    transformation = tf.keras.layers.Layer(name="transformation")(transformation)
     #get the EfficientPose model for training without NMS and the rotation and translation output combined in the transformation output because of the loss calculation
+    #efficientpose_train = models.Model(inputs = [image_input, camera_parameters_input], outputs = [classification, bbox_regression, transformation], name = 'efficientpose')
     efficientpose_train = models.Model(inputs = [image_input, camera_parameters_input], outputs = [classification, bbox_regression, transformation], name = 'efficientpose')
-
-    # filter detections (apply NMS / score threshold / select top-k)
-    filtered_detections = FilterDetections(num_rotation_parameters = num_rotation_parameters,
+    filtered_detections = FilterDetections(num_rotation_parameters = self.num_rotation_parameters,
                                         num_translation_parameters = 3,
                                         name = 'filtered_detections',
-                                        score_threshold = score_threshold
-                                        )(efficientpose_tflite([image_input, camera_parameters_input]))
+                                        score_threshold = self.score_threshold
+                                        )([bboxes, classification, rotation, translation])#(efficientpose_tflite([image_input, camera_parameters_input]))
 
-    #efficientpose_prediction = models.Model(inputs = [image_input, camera_parameters_input], outputs = filtered_detections, name = 'efficientpose_prediction')
-    efficientpose_prediction = models.Model(inputs = [image_input, camera_parameters_input], outputs = filtered_detections)
-    if print_architecture:
-        print_models(efficientpose_train, box_net, class_net, rotation_net, translation_net)
-        
-    #create list with all layers to be able to load all layer weights because sometimes the whole subnet weight loading is skipped if the output shape does not match instead of skipping just the output layer
-    all_layers = list(set(
-        weight_loader.get_all_layers(efficientpose_train) + weight_loader.get_all_layers(box_net) + weight_loader.get_all_layers(class_net) + weight_loader.get_all_layers(rotation_net) + weight_loader.get_all_layers(translation_net)))
-    # all_layers = None 
-    # efficientpose_prediction = None
-    return efficientpose_train, efficientpose_prediction, all_layers, efficientpose_tflite
+    efficientpose_prediction = models.Model(inputs = [image_input, camera_parameters_input], outputs = filtered_detections, name = 'efficientpose_prediction')
 
-
+    return efficientpose_train, efficientpose_prediction, efficientpose_tflite
+    #return tf.keras.Model(inputs=[image_input, camera_parameters_input], outputs=self([image_input, camera_parameters_input]))
 def get_scaled_parameters(phi):
     """
     Get all needed scaled parameters to build EfficientPose
@@ -216,8 +159,8 @@ def get_scaled_parameters(phi):
     
     return parameters
 
-
-def build_BiFPN(backbone_feature_maps, bifpn_depth, bifpn_width, freeze_bn, lite):
+class BiFPN(tf.keras.Model):
+  def __init__(self, bifpn_depth, bifpn_width, freeze_bn, lite, **kwargs):
     """
     Building the bidirectional feature pyramid as described in https://arxiv.org/abs/1911.09070
     Args:
@@ -229,14 +172,19 @@ def build_BiFPN(backbone_feature_maps, bifpn_depth, bifpn_width, freeze_bn, lite
     Returns:
        fpn_feature_maps: Sequence of BiFPN layers of the different levels (P3, P4, P5, P6, P7)
     """
+    super().__init__(**kwargs)
+    self.bifpn_layers = [BiFPNLayer(bifpn_width, i, freeze_bn=freeze_bn, lite=lite) for i in range(bifpn_depth)]
+    
+  def call(self, backbone_feature_maps, training=False):
     fpn_feature_maps = backbone_feature_maps
-    for i in range(bifpn_depth):
-        fpn_feature_maps = build_BiFPN_layer(fpn_feature_maps, bifpn_width, i, freeze_bn = freeze_bn, lite = lite)
-        
+    for layer in self.bifpn_layers:
+      fpn_feature_maps = layer(fpn_feature_maps)      
     return fpn_feature_maps
 
 
-def build_BiFPN_layer(features, num_channels, idx_BiFPN_layer, freeze_bn = False, lite = False):
+class BiFPNLayer(tf.keras.Model):
+  def __init__(self, num_channels, idx_BiFPN_layer, freeze_bn = False, lite = False, **kwargs):
+    super().__init__(**kwargs)
     """
     Builds a single layer of the bidirectional feature pyramid
     Args:
@@ -248,71 +196,99 @@ def build_BiFPN_layer(features, num_channels, idx_BiFPN_layer, freeze_bn = False
     Returns:
        BiFPN layers of the different levels (P3, P4, P5, P6, P7)
     """
-    if idx_BiFPN_layer == 0:
+    self.idx_BiFPN_layer = idx_BiFPN_layer
+    self.prepare_features = PrepareFeatureMapsForBiFPN(num_channels, freeze_bn) if idx_BiFPN_layer == 0 else tf.keras.layers.Layer()
+    self.top_downway = TopDownPathwayBiFPN(num_channels, idx_BiFPN_layer, lite)
+    self.bottom_up = BottomUpPathwayBiFPN(num_channels, idx_BiFPN_layer, lite)
+
+  def call(self, features, training=False):
+    if self.idx_BiFPN_layer == 0:
         _, _, C3, C4, C5 = features
-        P3_in, P4_in_1, P4_in_2, P5_in_1, P5_in_2, P6_in, P7_in = prepare_feature_maps_for_BiFPN(C3, C4, C5, num_channels, freeze_bn)
+        P3_in, P4_in_1, P4_in_2, P5_in_1, P5_in_2, P6_in, P7_in = self.prepare_features([C3, C4, C5])
     else:
         P3_in, P4_in, P5_in, P6_in, P7_in = features
         
     #top down pathway
     input_feature_maps_top_down = [P7_in,
                                    P6_in,
-                                   P5_in_1 if idx_BiFPN_layer == 0 else P5_in,
-                                   P4_in_1 if idx_BiFPN_layer == 0 else P4_in,
+                                   P5_in_1 if self.idx_BiFPN_layer == 0 else P5_in,
+                                   P4_in_1 if self.idx_BiFPN_layer == 0 else P4_in,
                                    P3_in]
     
-    P7_in, P6_td, P5_td, P4_td, P3_out = top_down_pathway_BiFPN(input_feature_maps_top_down, num_channels, idx_BiFPN_layer, lite)
+    P7_in, P6_td, P5_td, P4_td, P3_out = self.top_downway(input_feature_maps_top_down)
     
     #bottom up pathway
     input_feature_maps_bottom_up = [[P3_out],
-                                    [P4_in_2 if idx_BiFPN_layer == 0 else P4_in, P4_td],
-                                    [P5_in_2 if idx_BiFPN_layer == 0 else P5_in, P5_td],
+                                    [P4_in_2 if self.idx_BiFPN_layer == 0 else P4_in, P4_td],
+                                    [P5_in_2 if self.idx_BiFPN_layer == 0 else P5_in, P5_td],
                                     [P6_in, P6_td],
                                     [P7_in]]
     
-    P3_out, P4_out, P5_out, P6_out, P7_out = bottom_up_pathway_BiFPN(input_feature_maps_bottom_up, num_channels, idx_BiFPN_layer, lite)
+    P3_out, P4_out, P5_out, P6_out, P7_out = self.bottom_up(input_feature_maps_bottom_up)
     
     
     return P3_out, P4_td, P5_td, P6_td, P7_out #TODO check if it is a bug to return the top down feature maps instead of the output maps
 
 
-def prepare_feature_maps_for_BiFPN(C3, C4, C5, num_channels, freeze_bn):
+class PrepareFeatureMapsForBiFPN(tf.keras.Model):
+  def __init__(self, num_channels, freeze_bn, **kwargs):
     """
     Prepares the backbone feature maps for the first BiFPN layer
     Args:
-        C3, C4, C5: The EfficientNet backbone feature maps of the different levels
         num_channels: Number of channels used in the BiFPN
         freeze_bn: Boolean indicating if the batch norm layers should be freezed during training or not.
     
     Returns:
        The prepared input feature maps for the first BiFPN layer
     """
+    super().__init__(**kwargs)
+    self.p3_conv1 = layers.Conv2D(num_channels, kernel_size = 1, padding = 'same', name = 'fpn_cells/cell_0/fnode3/resample_0_0_8/conv2d')
+    self.p3_bn1 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode3/resample_0_0_8/bn')
+
+    self.p4_conv1 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='fpn_cells/cell_0/fnode2/resample_0_1_7/conv2d')
+    self.p4_bn1 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode2/resample_0_1_7/bn')
+    self.p4_conv2 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='fpn_cells/cell_0/fnode4/resample_0_1_9/conv2d')
+    self.p4_bn2 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode4/resample_0_1_9/bn')
+    
+    self.p5_conv1 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='fpn_cells/cell_0/fnode1/resample_0_2_6/conv2d')
+    self.p5_bn1 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode1/resample_0_2_6/bn')
+    self.p5_conv2 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='fpn_cells/cell_0/fnode5/resample_0_2_10/conv2d')
+    self.p5_bn2  = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode5/resample_0_2_10/bn')
+    
+    self.p6_conv1 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='resample_p6/conv2d')
+    self.p6_bn1 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='resample_p6/bn')
+    self.p6_pool = layers.MaxPooling2D(pool_size=3, strides=2, padding='same', name='resample_p6/maxpool')
+    
+    self.p7_pool = layers.MaxPooling2D(pool_size=3, strides=2, padding='same', name='resample_p7/maxpool')
+  def call(self, inputs, training=False):
+    C3, C4, C5 = inputs
     P3_in = C3
-    P3_in = layers.Conv2D(num_channels, kernel_size = 1, padding = 'same', name = 'fpn_cells/cell_0/fnode3/resample_0_0_8/conv2d')(P3_in)
-    P3_in = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode3/resample_0_0_8/bn')(P3_in)
+    P3_in = self.p3_conv1(P3_in)
+    P3_in = self.p3_bn1(P3_in)
     
     P4_in = C4
-    P4_in_1 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='fpn_cells/cell_0/fnode2/resample_0_1_7/conv2d')(P4_in)
-    P4_in_1 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode2/resample_0_1_7/bn')(P4_in_1)
-    P4_in_2 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='fpn_cells/cell_0/fnode4/resample_0_1_9/conv2d')(P4_in)
-    P4_in_2 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode4/resample_0_1_9/bn')(P4_in_2)
+    P4_in_1 = self.p4_conv1(P4_in)
+    P4_in_1 = self.p4_bn1(P4_in_1)
+    P4_in_2 = self.p4_conv2(P4_in)
+    P4_in_2 = self.p4_bn2(P4_in_2)
     
     P5_in = C5
-    P5_in_1 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='fpn_cells/cell_0/fnode1/resample_0_2_6/conv2d')(P5_in)
-    P5_in_1 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode1/resample_0_2_6/bn')(P5_in_1)
-    P5_in_2 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='fpn_cells/cell_0/fnode5/resample_0_2_10/conv2d')(P5_in)
-    P5_in_2 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode5/resample_0_2_10/bn')(P5_in_2)
+    P5_in_1 = self.p5_conv1(P5_in)
+    P5_in_1 = self.p5_bn1(P5_in_1)
+    P5_in_2 = self.p5_conv2(P5_in)
+    P5_in_2 = self.p5_bn2(P5_in_2)
     
-    P6_in = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='resample_p6/conv2d')(C5)
-    P6_in = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='resample_p6/bn')(P6_in)
-    P6_in = layers.MaxPooling2D(pool_size=3, strides=2, padding='same', name='resample_p6/maxpool')(P6_in)
+    P6_in = self.p6_conv1(C5)
+    P6_in = self.p6_bn1(P6_in)
+    P6_in = self.p6_pool(P6_in)
     
-    P7_in = layers.MaxPooling2D(pool_size=3, strides=2, padding='same', name='resample_p7/maxpool')(P6_in)
+    P7_in = self.p7_pool(P6_in)
     
     return P3_in, P4_in_1, P4_in_2, P5_in_1, P5_in_2, P6_in, P7_in
 
 
-def top_down_pathway_BiFPN(input_feature_maps_top_down, num_channels, idx_BiFPN_layer, lite):
+class TopDownPathwayBiFPN(tf.keras.Model):
+  def __init__(self, num_channels, idx_BiFPN_layer, lite, **kwargs):
     """
     Computes the top-down-pathway in a single BiFPN layer
     Args:
@@ -323,24 +299,29 @@ def top_down_pathway_BiFPN(input_feature_maps_top_down, num_channels, idx_BiFPN_
     Returns:
        Sequence with the output feature maps of the top-down-pathway
     """
+    super().__init__(**kwargs)
+    self.merge_steps = [
+      SingleBiFPNMergeStep(upsampling=True, 
+        num_channels=num_channels, 
+        idx_BiFPN_layer=idx_BiFPN_layer, 
+        node_idx = level - 1, 
+        op_idx = 4 + level, 
+        lite = lite) for level in range(1,5)
+    ]
+    
+  
+  def call(self, input_feature_maps_top_down, training=False):
     feature_map_P7 = input_feature_maps_top_down[0]
     output_top_down_feature_maps = [feature_map_P7]
     for level in range(1, 5):
-        merged_feature_map = single_BiFPN_merge_step(feature_map_other_level = output_top_down_feature_maps[-1],
-                                                    feature_maps_current_level = [input_feature_maps_top_down[level]],
-                                                    upsampling = True,
-                                                    num_channels = num_channels,
-                                                    idx_BiFPN_layer = idx_BiFPN_layer,
-                                                    node_idx = level - 1,
-                                                    op_idx = 4 + level, 
-                                                    lite = lite)
-        
+        merged_feature_map = self.merge_steps[level - 1]([output_top_down_feature_maps[-1], [input_feature_maps_top_down[level]]])        
         output_top_down_feature_maps.append(merged_feature_map)
         
     return output_top_down_feature_maps
 
 
-def bottom_up_pathway_BiFPN(input_feature_maps_bottom_up, num_channels, idx_BiFPN_layer, lite):
+class BottomUpPathwayBiFPN(tf.keras.Model):
+  def __init__(self, num_channels, idx_BiFPN_layer, lite, **kwargs):
     """
     Computes the bottom-up-pathway in a single BiFPN layer
     Args:
@@ -351,18 +332,21 @@ def bottom_up_pathway_BiFPN(input_feature_maps_bottom_up, num_channels, idx_BiFP
     Returns:
        Sequence with the output feature maps of the bottom-up-pathway
     """
+    super().__init__(**kwargs)
+    self.merge_steps = [
+      SingleBiFPNMergeStep(upsampling=False, 
+        num_channels=num_channels, 
+        idx_BiFPN_layer=idx_BiFPN_layer, 
+        node_idx = level + 3, 
+        op_idx = 8 + level, 
+        lite = lite) for level in range(1,5)
+    ]
+    
+  def call(self, input_feature_maps_bottom_up, training=False):
     feature_map_P3 = input_feature_maps_bottom_up[0][0]
     output_bottom_up_feature_maps = [feature_map_P3]
     for level in range(1, 5):
-        merged_feature_map = single_BiFPN_merge_step(feature_map_other_level = output_bottom_up_feature_maps[-1],
-                                                    feature_maps_current_level = input_feature_maps_bottom_up[level],
-                                                    upsampling = False,
-                                                    num_channels = num_channels,
-                                                    idx_BiFPN_layer = idx_BiFPN_layer,
-                                                    node_idx = 3 + level,
-                                                    op_idx = 8 + level, 
-                                                    lite = lite)
-        
+        merged_feature_map = self.merge_steps[level-1]([output_bottom_up_feature_maps[-1], input_feature_maps_bottom_up[level]])  
         output_bottom_up_feature_maps.append(merged_feature_map)
         
     return output_bottom_up_feature_maps
@@ -373,6 +357,8 @@ class StaticUpsampling(tf.keras.layers.Layer):
     
     def build(self, input_shape):
         self.upsampled_output_shape = (2*input_shape[1], 2*input_shape[2])
+        self.built = True
+        super().build(input_shape)
     
     def call(self, inputs, **kwargs):
         return tf.image.resize(inputs, self.upsampled_output_shape, method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
@@ -380,8 +366,8 @@ class StaticUpsampling(tf.keras.layers.Layer):
     def get_config(self):
         return super().get_config()
 
-
-def single_BiFPN_merge_step(feature_map_other_level, feature_maps_current_level, upsampling, num_channels, idx_BiFPN_layer, node_idx, op_idx, lite):
+class SingleBiFPNMergeStep(tf.keras.Model):
+  def __init__(self, upsampling, num_channels, idx_BiFPN_layer, node_idx, op_idx, lite):
     """
     Merges two feature maps of different levels in the BiFPN
     Args:
@@ -395,40 +381,38 @@ def single_BiFPN_merge_step(feature_map_other_level, feature_maps_current_level,
     Returns:
        The merged feature map
     """
+    super().__init__()
     if upsampling:
-        feature_map_resampled = StaticUpsampling()(feature_map_other_level)
+        self.feature_map_resampled = StaticUpsampling()
     else:
-        feature_map_resampled = layers.MaxPooling2D(pool_size = 3, strides = 2, padding = 'same')(feature_map_other_level)
+        self.feature_map_resampled = layers.MaxPooling2D(pool_size = 3, strides = 2, padding = 'same')
     
-    merged_feature_map = wBiFPNAdd(name = f'fpn_cells/cell_{idx_BiFPN_layer}/fnode{node_idx}/add')(feature_maps_current_level + [feature_map_resampled])
+    self.merged_feature_map_add = wBiFPNAdd(name = f'fpn_cells/cell_{idx_BiFPN_layer}/fnode{node_idx}/add')
     if lite: 
-        merged_feature_map = layers.Activation(lambda x: tf.nn.relu6(x))(merged_feature_map)
+        self.merged_feature_map_activation = layers.Activation(lambda x: tf.nn.relu6(x))
     else:
-        merged_feature_map = layers.Activation(lambda x: tf.nn.swish(x))(merged_feature_map)
-    merged_feature_map = SeparableConvBlock(num_channels = num_channels,
+        self.merged_feature_map_activation = layers.Activation(lambda x: tf.nn.swish(x))
+    self.merged_feature_map_conv = SeparableConvBlock(num_channels = num_channels,
                                             kernel_size = 3,
                                             strides = 1,
-                                            name = f'fpn_cells/cell_{idx_BiFPN_layer}/fnode{node_idx}/op_after_combine{op_idx}')(merged_feature_map)
+                                            name = f'fpn_cells/cell_{idx_BiFPN_layer}/fnode{node_idx}/op_after_combine{op_idx}')
+  
+  def call(self, inputs, training=False):
+    feature_map_other_level, feature_maps_current_level = inputs
+    x = self.feature_map_resampled(feature_map_other_level)
+    x = self.merged_feature_map_add(feature_maps_current_level + [x])
+    x = self.merged_feature_map_activation(x)
+    return self.merged_feature_map_conv(x)
 
-    return merged_feature_map
 
-
-def SeparableConvBlock(num_channels, kernel_size, strides, name, freeze_bn = False):
-    """
-    Builds a small block consisting of a depthwise separable convolution layer and a batch norm layer
-    Args:
-        num_channels: Number of channels used in the BiFPN
-        kernel_size: Kernel site of the depthwise separable convolution layer
-        strides: Stride of the depthwise separable convolution layer
-        name: Name of the block
-        freeze_bn: Boolean indicating if the batch norm layers should be freezed during training or not.
-    
-    Returns:
-       The depthwise separable convolution block
-    """
-    f1 = layers.SeparableConv2D(num_channels, kernel_size = kernel_size, strides = strides, padding = 'same', use_bias = True, name = f'{name}/conv')
-    f2 = BatchNormalization(freeze = freeze_bn, momentum = MOMENTUM, epsilon = EPSILON, name = f'{name}/bn')
-    return reduce(lambda f, g: lambda *args, **kwargs: g(f(*args, **kwargs)), (f1, f2))
+class SeparableConvBlock(tf.keras.Model):
+  def __init__(self, num_channels, kernel_size, strides, name, freeze_bn = False):
+    super().__init__(name=name)
+    self.f1 = layers.SeparableConv2D(num_channels, kernel_size = kernel_size, strides = strides, padding = 'same', use_bias = True, name = f'{name}/conv')
+    self.f2 = BatchNormalization(freeze = freeze_bn, momentum = MOMENTUM, epsilon = EPSILON, name = f'{name}/bn')
+  
+  def call(self, inputs, training=False):
+      return self.f2(self.f1(inputs))
 
 
 def build_subnets(num_classes, subnet_width, subnet_depth, subnet_num_iteration_steps, num_groups_gn, num_rotation_parameters, freeze_bn, num_anchors, lite):
@@ -494,6 +478,7 @@ class StaticReshape(tf.keras.layers.Layer):
         self.static_batch_size = input_shape[0] or -1 # dynamic size
         self.static_output_length = input_shape[1]*input_shape[2]*(input_shape[3] // self.num_classes)
         self.static_num_channels = input_shape[3]
+        super().build(input_shape)
     
     def call(self, inputs, **kwargs):
         return tf.reshape(inputs, [self.static_batch_size, self.static_output_length, self.num_classes])
@@ -549,31 +534,20 @@ class BoxNet(layers.Layer):
         #self.reshape = layers.Reshape((-1, self.num_values))
         self.reshapes = [StaticReshape(self.num_values, name=f"box_reshape_{i+1}") for i in range(5)] 
         self.level = 0
+        self.final_concat = layers.Concatenate(1, name="regression")
 
-    def call(self, feature, level, **kwargs):
+    def call(self, features, **kwargs):
+      def _apply_on_feature(feature, level):
         for i in range(self.depth):
             feature = self.convs[i](feature)
             feature = self.bns[i][level](feature)
             feature = self.activation(feature)
         outputs = self.head(feature)
-        #outputs = self.reshape(outputs)
         outputs = self.reshapes[level](outputs)
-        #self.level += 1
-        # self.level = self.level % 5
         return outputs
+      return self.final_concat([_apply_on_feature(features[i], i) for i in range(5)])
 
-class ClassNet(layers.Layer):
-    def get_config(self):
-        config = super().get_config()
-        config.update({
-            "width": self.width,
-            "depth": self.depth,
-            "num_anchors": self.num_anchors,
-            "num_classes": self.num_classes,
-            "lite": self.lite, 
-            "freeze_bn": self.freeze_bn
-        })
-        return config
+class ClassNet(tf.keras.Model):
     def __init__(self, width, depth, num_classes = 8, num_anchors = 9, freeze_bn = False, lite = False, **kwargs):
         super(ClassNet, self).__init__(**kwargs)
         self.width = width
@@ -606,36 +580,22 @@ class ClassNet(layers.Layer):
         self.reshapes = [StaticReshape(self.num_classes, name=f"classnet_reshape_{i+1}") for i in range(5)]
         self.activation_sigmoid = layers.Activation('sigmoid') # if not lite else layers.Lambda(lambda x: tf.nn.relu6(x))
         self.level = 0
-
-    def call(self, feature, level, **kwargs):
-        for i in range(self.depth):
-            feature = self.convs[i](feature)
-            feature = self.bns[i][level](feature)
-            feature = self.activation(feature)
-        outputs = self.head(feature)
-        #outputs = self.reshape(outputs)
-        outputs = self.reshapes[level](outputs)
-        outputs = self.activation_sigmoid(outputs)
-        #self.level += 1
-        # self.level = self.level % 5
-        return outputs
+        self.final_concat = layers.Concatenate(axis=1, name="classification")
+    def call(self, features, **kwargs):
+        def _compute_for_feature(feature, level):
+          for i in range(self.depth):
+              feature = self.convs[i](feature)
+              feature = self.bns[i][level](feature)
+              feature = self.activation(feature)
+          outputs = self.head(feature)
+          outputs = self.reshapes[level](outputs)
+          return self.activation_sigmoid(outputs)
+        return self.final_concat([
+          _compute_for_feature(features[i], i) for i in range(5)
+        ])
     
     
-class IterativeRotationSubNet(layers.Layer):
-    def get_config(self):
-        config = super().get_config()
-        config.update({
-            "width": self.width,
-            "depth": self.depth,
-            "num_anchors": self.num_anchors,
-            "num_values": self.num_values,
-            "num_iteration_steps": self.num_iteration_steps,
-            "lite": self.lite, 
-            "freeze_bn": self.freeze_bn,
-            "use_group_norm": self.use_group_norm,
-            "num_groups_gn": self.num_groups_gn
-        })
-        return config
+class IterativeRotationSubNet(tf.keras.Model):
     def __init__(self, width, depth, num_values, num_iteration_steps, num_anchors = 9, freeze_bn = False, use_group_norm = True, num_groups_gn = None, lite = False, **kwargs):
         super(IterativeRotationSubNet, self).__init__(**kwargs)
         self.width = width
@@ -689,21 +649,7 @@ class IterativeRotationSubNet(layers.Layer):
         return outputs
     
     
-class RotationNet(layers.Layer):
-    def get_config(self):
-        config = super().get_config()
-        config.update({
-            "width": self.width,
-            "num_anchors": self.num_anchors,
-            "num_values": self.num_values,
-            "num_iteration_steps": self.num_iteration_steps,
-            "lite": self.lite, 
-            "freeze_bn": self.freeze_bn,
-            "use_group_norm": self.use_group_norm,
-            "num_groups_gn": self.num_groups_gn,
-            "depth": self.depth
-        })
-        return config
+class RotationNet(tf.keras.Model):
     def __init__(self, width, depth, num_values, num_iteration_steps, num_anchors = 9, freeze_bn = False, use_group_norm = True, num_groups_gn = None, lite = False, **kwargs):
         super(RotationNet, self).__init__(**kwargs)
         self.width = width
@@ -762,41 +708,27 @@ class RotationNet(layers.Layer):
         self.level = 0
         self.add = layers.Add()
         self.concat = layers.Concatenate(axis = channel_axis)
+        self.final_concat = layers.Concatenate(1, name="rotation")
 
-    def call(self, feature, level, **kwargs):
-        for i in range(self.depth):
-            feature = self.convs[i](feature)
-            feature = self.norm_layer[i][level](feature)
-            feature = self.activation(feature)
-            
-        rotation = self.initial_rotation(feature)
-        
-        for i in range(self.num_iteration_steps):
-            iterative_input = self.concat([feature, rotation])
-            delta_rotation = self.iterative_submodel(iterative_input, level, iter_step_py = i)
-            rotation = self.add([rotation, delta_rotation])
-        
-        #outputs = self.reshape(rotation)
-        outputs = self.reshapes[level](rotation)
-        #self.level += 1
-        # self.level = self.level % 5
-        return outputs
+    def call(self, features, **kwargs):
+        def _apply_on_feature(feature, level):
+          for i in range(self.depth):
+              feature = self.convs[i](feature)
+              feature = self.norm_layer[i][level](feature)
+              feature = self.activation(feature)
+              
+          rotation = self.initial_rotation(feature)
+          
+          for i in range(self.num_iteration_steps):
+              iterative_input = self.concat([feature, rotation])
+              delta_rotation = self.iterative_submodel(iterative_input, level, iter_step_py = i)
+              rotation = self.add([rotation, delta_rotation])   
+          return self.reshapes[level](rotation)
+
+        return self.final_concat([_apply_on_feature(features[i], i) for i in range(5)])
     
     
-class IterativeTranslationSubNet(layers.Layer):
-    def get_config(self):
-        config = super().get_config()
-        config.update({
-            "width": self.width,
-            "num_anchors": self.num_anchors,
-            "num_iteration_steps": self.num_iteration_steps,
-            "lite": self.lite, 
-            "freeze_bn": self.freeze_bn,
-            "use_group_norm": self.use_group_norm,
-            "num_groups_gn": self.num_groups_gn,
-            "depth": self.depth
-        })
-        return config
+class IterativeTranslationSubNet(tf.keras.Model):
     def __init__(self, width, depth, num_iteration_steps, num_anchors = 9, freeze_bn = False, use_group_norm = True, num_groups_gn = None, lite = False, **kwargs):
         super(IterativeTranslationSubNet, self).__init__(**kwargs)
         self.width = width
@@ -854,20 +786,7 @@ class IterativeTranslationSubNet(layers.Layer):
     
     
     
-class TranslationNet(layers.Layer):
-    def get_config(self):
-        config = super().get_config()
-        config.update({
-            "width": self.width,
-            "num_anchors": self.num_anchors,
-            "num_iteration_steps": self.num_iteration_steps,
-            "lite": self.lite, 
-            "freeze_bn": self.freeze_bn,
-            "use_group_norm": self.use_group_norm,
-            "num_groups_gn": self.num_groups_gn,
-            "depth": self.depth
-        })
-        return config
+class TranslationNet(tf.keras.Model):
     def __init__(self, width, depth, num_iteration_steps, num_anchors = 9, freeze_bn = False, use_group_norm = True, num_groups_gn = None, lite = False, **kwargs):
         super(TranslationNet, self).__init__(**kwargs)
         self.width = width
@@ -929,35 +848,35 @@ class TranslationNet(layers.Layer):
         self.concat = layers.Concatenate(axis = channel_axis)
             
         self.concat_output = layers.Concatenate(axis = -1) #always last axis after reshape
-
-    def call(self, feature, level, **kwargs):
-        assert level is not None
-        for i in range(self.depth):
-            feature = self.convs[i](feature)
-            feature = self.norm_layer[i][level](feature)
-            feature = self.activation(feature)
-            
-        translation_xy = self.initial_translation_xy(feature)
-        translation_z = self.initial_translation_z(feature)
-        
-        for i in range(self.num_iteration_steps):
-            iterative_input = self.concat([feature, translation_xy, translation_z])
-            delta_translation_xy, delta_translation_z = self.iterative_submodel(iterative_input, level, iter_step_py = i)
-            translation_xy = self.add([translation_xy, delta_translation_xy])
-            translation_z = self.add([translation_z, delta_translation_z])
-        
-        #outputs_xy = self.reshape_xy(translation_xy)
-        #outputs_z = self.reshape_z(translation_z)
-        outputs_xy = self.reshapes_xy[level](translation_xy)
-        outputs_z = self.reshapes_z[level](translation_z)
-        outputs = self.concat_output([outputs_xy, outputs_z])
-        #self.level += 1
-        # self.level = self.level % 5
-        return outputs
+        self.final_concat = layers.Concatenate(axis=1, name="translation_raw_outputs")
+    def call(self, features, **kwargs):
+        def _apply_on_feature(feature, level):
+          for i in range(self.depth):
+              feature = self.convs[i](feature)
+              feature = self.norm_layer[i][level](feature)
+              feature = self.activation(feature)
+              
+          translation_xy = self.initial_translation_xy(feature)
+          translation_z = self.initial_translation_z(feature)
+          
+          for i in range(self.num_iteration_steps):
+              iterative_input = self.concat([feature, translation_xy, translation_z])
+              delta_translation_xy, delta_translation_z = self.iterative_submodel(iterative_input, level, iter_step_py = i)
+              translation_xy = self.add([translation_xy, delta_translation_xy])
+              translation_z = self.add([translation_z, delta_translation_z])
+          
+          outputs_xy = self.reshapes_xy[level](translation_xy)
+          outputs_z = self.reshapes_z[level](translation_z)
+          return self.concat_output([outputs_xy, outputs_z])
+  
+        return self.final_concat([
+          _apply_on_feature(features[i], i) for i in range(5)
+        ])
     
 class StaticExpandDims(tf.keras.layers.Layer):
     def build(self, input_shape):
         self.static_output_shape = [1, *input_shape]
+        self.built = True
         return super().build(input_shape)
     
     def call(self, inputs, **kwargs):
@@ -1034,3 +953,35 @@ def print_models(*models):
         print("\n\n")
         model.summary()
         print("\n\n")
+
+def allow_gpu_growth_memory():
+    """
+        Set allow growth GPU memory to true
+
+    """
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError as e:
+            print(e)
+
+def main(argv):
+  from utils import weight_loader
+  allow_gpu_growth_memory()
+  model = EfficientPose(0, 1)
+  image = tf.random.normal((1,512,512,3))
+  params = tf.random.normal((1,6))
+  model([image, params])
+  
+  image_input = layers.Input((512, 512, 3))
+  params_input = layers.Input((6,))
+  efficientpose_train, efficientpose_prediction, efficientpose_tflite = model.get_models()
+  #efficientpose_tflite = model.get_models()
+  efficientpose_tflite([image, params])
+  weight_loader.load_weights_rec(efficientpose_tflite, "/home/mark/Downloads/phi_0_linemod_best_ADD.h5", 0, 20)
+  #efficientpose_tflite.save("models/model.h5")
+if __name__ == "__main__":
+  from absl import app
+  app.run(main)

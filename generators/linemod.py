@@ -36,6 +36,7 @@ from absl import flags
 
 flags.DEFINE_string("linemod_path", "/mnt/data/datasets/Linemod_preprocessed", "Path to dataset directory")
 flags.DEFINE_integer("object_id", 8, 'ID of the Linemod Object to train on')
+flags.DEFINE_string("image_extension", ".png", "Which image extension to use")
 
 
 
@@ -48,7 +49,7 @@ class LineModGenerator(Generator):
     def __init__(self, 
                  dataset_base_path,
                  object_id,
-                 image_extension = ".png",
+                 image_extension = None,
                  shuffle_dataset = True,
                   symmetric_objects = {"glue", 11, "eggbox", 10}, #set with names and indices of symmetric objects
                  **kwargs):
@@ -122,7 +123,7 @@ class LineModGenerator(Generator):
         
         #get the final input and annotation infos for the base generator
         self.image_paths, self.mask_paths, self.depth_paths, self.annotations, self.infos = self.prepare_dataset(self.object_path, self.data_examples, self.gt_dict, self.info_dict)
-        
+
         #shuffle dataset
         if self.shuffle_dataset:
             self.image_paths, self.mask_paths, self.depth_paths, self.annotations, self.infos = self.shuffle_sequences(self.image_paths, self.mask_paths, self.depth_paths, self.annotations, self.infos)
@@ -355,8 +356,8 @@ class LineModGenerator(Generator):
         #load all images which are in the dataset split (train/test)
         all_filenames = [filename for filename in os.listdir(all_images_path) if self.image_extension in filename and filename.replace(self.image_extension, "") in data_examples]
         image_paths = [os.path.join(all_images_path, filename) for filename in all_filenames]
-        mask_paths = [img_path.replace("rgb", "mask") for img_path in image_paths]
-        depth_paths = [img_path.replace("rgb", "depth") for img_path in image_paths]
+        mask_paths = [img_path.replace("rgb", "mask").replace(self.image_extension, ".png") for img_path in image_paths]
+        depth_paths = [img_path.replace("rgb", "depth").replace(self.image_extension, ".png") for img_path in image_paths]
         
         #parse the example ids for the gt dict from filenames
         example_ids = [int(filename.split(".")[0]) for filename in all_filenames]

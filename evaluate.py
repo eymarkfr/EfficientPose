@@ -46,7 +46,8 @@ import sys
 
 import tensorflow as tf
 
-from model import build_EfficientPose
+#from model import build_EfficientPose
+import model_clean
 from eval.common import evaluate
 from generators.linemod import LineModGenerator
 from generators.occlusion import OcclusionGenerator
@@ -132,7 +133,7 @@ def run_eval(args):
     if args.is_tflite:
         prediction_model = TfliteWrapper(args.weights, args.score_threshold)
     else:
-        nlub, prediction_model, _, _ = build_EfficientPose(args.phi,
+        model = model_clean.EfficientPose(args.phi,
                                                     num_classes = num_classes,
                                                     num_anchors = num_anchors,
                                                     freeze_bn = False,
@@ -141,6 +142,7 @@ def run_eval(args):
                                                     print_architecture = False,
                                                     lite = args.lite,
                                                     no_se = args.no_se)
+        nlub, prediction_model, _ = model.get_models()
         print("Done!")
         # load pretrained weights
         print('Loading model, this may take a second...')
@@ -177,6 +179,7 @@ def create_generators(args):
     common_args = {
         'batch_size': args.batch_size,
         'phi': args.phi,
+        'image_extension': args.image_extension
     }
 
     if args.dataset_type == 'linemod':
