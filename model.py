@@ -72,7 +72,8 @@ def build_EfficientPose(phi,
                         lite = False,
                         no_se = False,
                         for_converter = False,
-                        batch_size = None):
+                        batch_size = None,
+                        use_groupnorm = False):
     """
     Builds an EfficientPose model
     Args:
@@ -137,7 +138,8 @@ def build_EfficientPose(phi,
                                                                       num_rotation_parameters,
                                                                       freeze_bn,
                                                                       num_anchors,
-                                                                      lite)
+                                                                      lite,
+                                                                      use_groupnorm)
     
     #apply subnets to feature maps
     classification, bbox_regression, rotation, translation, transformation, bboxes = apply_subnets_to_feature_maps(box_net,
@@ -431,7 +433,7 @@ def SeparableConvBlock(num_channels, kernel_size, strides, name, freeze_bn = Fal
     return reduce(lambda f, g: lambda *args, **kwargs: g(f(*args, **kwargs)), (f1, f2))
 
 
-def build_subnets(num_classes, subnet_width, subnet_depth, subnet_num_iteration_steps, num_groups_gn, num_rotation_parameters, freeze_bn, num_anchors, lite):
+def build_subnets(num_classes, subnet_width, subnet_depth, subnet_num_iteration_steps, num_groups_gn, num_rotation_parameters, freeze_bn, num_anchors, lite, use_groupnorm):
     """
     Builds the EfficientPose subnetworks
     Args:
@@ -468,7 +470,7 @@ def build_subnets(num_classes, subnet_width, subnet_depth, subnet_num_iteration_
                                 num_iteration_steps = subnet_num_iteration_steps,
                                 num_anchors = num_anchors,
                                 freeze_bn = freeze_bn,
-                                use_group_norm = FLAGS.use_groupnorm,
+                                use_group_norm = use_groupnorm,
                                 num_groups_gn = num_groups_gn,
                                 name = 'rotation_net', 
                                 lite = lite)
@@ -478,7 +480,7 @@ def build_subnets(num_classes, subnet_width, subnet_depth, subnet_num_iteration_
                                 num_iteration_steps = subnet_num_iteration_steps,
                                 num_anchors = num_anchors,
                                 freeze_bn = freeze_bn,
-                                use_group_norm = FLAGS.use_groupnorm,
+                                use_group_norm = use_groupnorm,
                                 num_groups_gn = num_groups_gn,
                                 name = 'translation_net',
                                 lite = lite)

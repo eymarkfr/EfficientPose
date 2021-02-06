@@ -120,7 +120,8 @@ def train(args):
                                     score_threshold = args.score_threshold,
                                     num_rotation_parameters = num_rotation_parameters,
                                     lite = args.lite,
-                                    no_se = args.no_se)
+                                    no_se = args.no_se,
+                                    build_EfficientPose = args.build_EfficientPose)
     #model, prediction_model, _ = model.get_models()
     model, prediction_model, _, _ = model
     print("Done!")
