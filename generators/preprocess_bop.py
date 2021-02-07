@@ -11,6 +11,7 @@ flags.DEFINE_string('raw_dir', '/mnt/data/datasets/lm_pbr/train_pbr', "pbr direc
 flags.DEFINE_string('out_dir', '/mnt/data/datasets/lm_pbr/processed', "outdir")
 flags.DEFINE_float('val_split', 0.1, "Validation split ratio")
 flags.DEFINE_bool('convert_to_png', False, "Wether or not to convert RGB images to png")
+flags.DEFINE_integer('max_to_keep', None, 'How many images to keep (before split). Per category.')
 
 def process_subdir(dir, out_dir, count, config, info, convert_to_png):
   scene_gt_file = os.path.join(dir, "scene_gt.json")
@@ -68,7 +69,7 @@ def process_subdir(dir, out_dir, count, config, info, convert_to_png):
         shutil.copy(in_rgb_file, out_rgb_file)
 
       in_depth_file = os.path.join(depth_dir, f"{int(image_num):06d}.png")
-      out_depth_file = os.path.join(out_depth, f"{count[category]:04d}.png")
+      out_depth_file = os.path.join(out_depth, f"{count[category]:06d}.png")
       shutil.copy(in_depth_file, out_depth_file)
 
       in_mask_file = os.path.join(mask_dir, f"{int(image_num):06d}_{i:06d}.png")
@@ -98,7 +99,33 @@ def write_summary(outdir, config, info):
     with open(info_file, 'w') as f:
       yaml.safe_dump(info[obj_id], f)
 
-def create_splits(outdir, val_split):
+def clear_unused(root_dir, files_to_keep):
+  depth_dir = os.path.join(root_dir, "depth")
+  rgb_dir = os.path.join(root_dir, "rgb")
+  mask_dir = os.path.join(root_dir, "mask")
+
+  files_to_keep_int = [int(f) for f in files_to_keep]
+  
+  for d in os.listdir(depth_dir):
+    if int(d.split(".")[0]) in files_to_keep_int:
+      continue
+    d = os.path.join(depth_dir, d)
+    os.remove(d)
+
+  for d in os.listdir(rgb_dir):
+    if int(d.split(".")[0]) in files_to_keep_int:
+      continue
+    d = os.path.join(rgb_dir, d)
+    os.remove(d)
+
+  for d in os.listdir(mask_dir):
+    if int(d.split(".")[0]) in files_to_keep_int:
+      continue
+    d = os.path.join(mask_dir, d)
+    os.remove(d)
+
+
+def create_splits(outdir, val_split, max_to_keep):
   print("Createing train and validation splits:")
   for cat_dir in tqdm(os.listdir(outdir)):
     cat_dir = os.path.join(outdir, cat_dir)
@@ -108,8 +135,12 @@ def create_splits(outdir, val_split):
     files = os.listdir(rgb)
     files = [f"{int(f[:-4]):06d}" for f in files] #remove .jpg
 
-    N = len(files)
     random.shuffle(files)
+    if max_to_keep is not None:
+      files = files[:max_to_keep]
+      clear_unused(cat_dir, files)
+
+    N = len(files)
     Nval = int(N*val_split)
     train_files = files[Nval:]
     val_files = files[:Nval]
@@ -135,7 +166,7 @@ def process(args):
     count, config, info = process_subdir(d, data_dir, count, config, info, args.convert_to_png)
 
   write_summary(data_dir, config, info)
-  create_splits(data_dir, args.val_split)
+  create_splits(data_dir, args.val_split, args.max_to_keep)
 
 def main(argv):
   process(flags.FLAGS)
