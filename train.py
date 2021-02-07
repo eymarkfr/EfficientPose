@@ -148,7 +148,7 @@ def train(args):
             model.layers[i].trainable = False
     # get optimizer
     if args.optimizer == "adam":
-        optimizer = Adam(lr = args.lr) #, clipnorm = 0.001)
+        optimizer = Adam(lr = args.lr, lipnorm = 0.001)
     else:
         if args.optimizer != "sgd":
             print(f"Optimizer {args.optimizer} not supported. Defaulting to SGD")
