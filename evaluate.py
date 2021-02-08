@@ -41,7 +41,7 @@ import argparse
 import os
 
 from tensorflow.python.ops.gen_array_ops import shape
-os.environ["CUDA_VISIBLE_DEVICES"]="-1"    
+#os.environ["CUDA_VISIBLE_DEVICES"]="-1"    
 import sys
 
 import tensorflow as tf
@@ -128,6 +128,7 @@ def run_eval(args):
     num_rotation_parameters = generator.get_num_rotation_parameters()
     num_classes = generator.num_classes()
     num_anchors = generator.num_anchors
+    print("num anchors", num_anchors)
 
     print("\nBuilding the Model...")
     if args.is_tflite:
@@ -141,11 +142,13 @@ def run_eval(args):
                                                     num_rotation_parameters = num_rotation_parameters,
                                                     print_architecture = False,
                                                     lite = args.lite,
-                                                    no_se = args.no_se)
+                                                    no_se = args.no_se,
+                                                    use_groupnorm=args.use_groupnorm)
         nlub, prediction_model, _ = model.get_models()
         print("Done!")
         # load pretrained weights
         print('Loading model, this may take a second...')
+        #prediction_model.load_weights(args.weights, by_name=True)
         load_weights_rec(prediction_model, args.weights, skip_mismatch=False)
         if args.freeze_bn:
             freeze_bn(prediction_model)

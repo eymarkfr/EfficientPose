@@ -94,7 +94,6 @@ class wBiFPNAdd(keras.layers.Layer):
         })
         return config
 
-@tf.function
 def bbox_transform_inv(boxes, deltas, scale_factors = None):
     """
     Reconstructs the 2D bounding boxes using the anchor boxes and the predicted deltas of the anchor boxes to the bounding boxes
@@ -106,11 +105,11 @@ def bbox_transform_inv(boxes, deltas, scale_factors = None):
         Tensor containing the reconstructed 2D bounding boxes with shape (..., 4)
 
     """
-    cxa = (boxes[..., 0] + boxes[..., 2]) / 2
-    cya = (boxes[..., 1] + boxes[..., 3]) / 2
-    wa = boxes[..., 2] - boxes[..., 0]
-    ha = boxes[..., 3] - boxes[..., 1]
-    ty, tx, th, tw = deltas[..., 0], deltas[..., 1], deltas[..., 2], deltas[..., 3]
+    cxa = (boxes[:, :, 0] + boxes[:, :, 2]) / 2
+    cya = (boxes[:, :, 1] + boxes[:, :, 3]) / 2
+    wa = boxes[:, :, 2] - boxes[:, :, 0]
+    ha = boxes[:, :, 3] - boxes[:, :, 1]
+    ty, tx, th, tw = deltas[:, :, 0], deltas[:, :, 1], deltas[:, :, 2], deltas[:, :, 3]
     if scale_factors:
         ty *= scale_factors[0]
         tx *= scale_factors[1]
@@ -179,7 +178,7 @@ class RegressBoxes(keras.layers.Layer):
         return bbox_transform_inv(anchors, regression)
 
     def compute_output_shape(self, input_shape):
-        return input_shape[0]
+        return input_shape
 
     def get_config(self):
         config = super(RegressBoxes, self).get_config()

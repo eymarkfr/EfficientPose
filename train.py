@@ -46,8 +46,8 @@ from tensorflow import keras
 from tensorflow.keras.optimizers import Adam, SGD
 from utils.weight_loader import load_weights_rec
 
-from model import build_EfficientPose
-#import model_clean
+#from model import build_EfficientPose
+import model_clean
 from losses import smooth_l1, focal, transformation_loss
 from efficientnet import BASE_WEIGHTS_PATH, WEIGHTS_HASHES
 
@@ -113,7 +113,7 @@ def train(args):
     #     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 
     print("\nBuilding the Model...")
-    model = build_EfficientPose(args.phi,
+    model = model_clean.EfficientPose(args.phi,
                                     num_classes = num_classes,
                                     num_anchors = num_anchors,
                                     freeze_bn = args.freeze_bn,
@@ -122,8 +122,8 @@ def train(args):
                                     lite = args.lite,
                                     no_se = args.no_se,
                                     use_groupnorm = args.use_groupnorm)
-    #model, prediction_model, _ = model.get_models()
-    model, prediction_model, _, _ = model
+    model, prediction_model, _ = model.get_models()
+    #model, prediction_model, _, _ = model
     print("Done!")
     # load pretrained weights
     if args.weights:
@@ -138,7 +138,7 @@ def train(args):
             model.load_weights(weights_path, by_name=True)
         else:
             print('Loading model, this may take a second...')
-            load_weights_rec(model, args.weights)
+            load_weights_rec(model, args.weights, skip_mismatch=True)
             print("\nDone!")
 
     # freeze backbone layers

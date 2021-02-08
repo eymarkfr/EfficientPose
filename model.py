@@ -54,8 +54,8 @@ import numpy as np
 import sys
 from absl import flags
 
-MOMENTUM = 0.9 #0.997
-EPSILON = 1e-3 #1e-4
+MOMENTUM = 0.997 #0.997
+EPSILON = 1e-4 #1e-4
 
 flags.DEFINE_bool("use_groupnorm", False, "Wether or not to use GroupNorm. Note that GroupNorm currently does not support mobile GPU")
 FLAGS = flags.FLAGS 

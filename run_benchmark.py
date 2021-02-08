@@ -30,6 +30,7 @@ def benchmark(args):
   print("For further instructions see https://www.tensorflow.org/lite/performance/measurement")
   print("Quick download benchmarking app (Jan 26. 2021): https://storage.googleapis.com/tensorflow-nightly-public/prod/tensorflow/release/lite/tools/nightly/latest/android_aarch64_benchmark_model_plus_flex")
   model_name = f"{args.base_name}_phi{args.phi}{'_lite' if args.lite else ''}.tflite"
+  model_name = "test.tflite"
   model_file = os.path.join(args.models_dir, model_name)
   android_path = os.path.join(args.android_path, model_name)
 

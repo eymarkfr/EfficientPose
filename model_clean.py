@@ -5,9 +5,10 @@ from tensorflow.keras import layers
 from tensorflow.keras import initializers
 from tensorflow.keras import models
 from tensorflow.keras import backend
+from tensorflow.python.keras.layers.preprocessing.normalization import Normalization
 from tfkeras import EfficientNetB0, EfficientNetB1, EfficientNetB2, EfficientNetB3, EfficientNetB4, EfficientNetB5, EfficientNetB6
 
-from layers import ClipBoxes, RegressBoxes, FilterDetections, wBiFPNAdd, BatchNormalization, RegressTranslation, CalculateTxTy, GroupNormalization
+from layers import ClipBoxes, RegressBoxes, FilterDetections, wBiFPNAdd, RegressTranslation, CalculateTxTy, GroupNormalization
 from initializers import PriorProbability
 from utils.anchors import anchors_for_shape
 from utils import weight_loader
@@ -15,12 +16,21 @@ import numpy as np
 import sys
 from absl import flags
 
-MOMENTUM = 0.9 #0.997
-EPSILON = 1e-3 #1e-4
+MOMENTUM = 0.997
+EPSILON = 1e-4
 
 flags.DEFINE_bool("use_groupnorm", False, "Wether or not to use GroupNorm. Note that GroupNorm currently does not support mobile GPU")
 FLAGS = flags.FLAGS 
 
+class CustomLayerNorm(layers.LayerNormalization):
+    def __call__(self, inputs, training):
+        return super().__call__(inputs)
+
+class CustomBatchNorm(layers.BatchNormalization):
+    def __init__(self, name):
+        super().__init__(momentum=MOMENTUM, epsilon=EPSILON, name=name)
+
+NormalizationLayer = CustomBatchNorm #CustomLayerNorm
 
 class EfficientPose(tf.keras.Model):
   def __init__(self, phi,
@@ -33,6 +43,7 @@ class EfficientPose(tf.keras.Model):
                     print_architecture = False,
                     lite = False,
                     no_se = False,
+                    use_groupnorm = False,
                     name="EfficientPose"):
     super().__init__(name=name)
     assert phi in range(7)
@@ -48,8 +59,8 @@ class EfficientPose(tf.keras.Model):
     self.num_rotation_parameters = num_rotation_parameters
 
     inp = layers.Input((self.input_size, self.input_size, 3))
-    self.backbone = self.backbone_class(input_tensor = inp, freeze_bn = freeze_bn, lite = lite, include_top = False, no_se = no_se)
-    self.backbone = tf.keras.Model(inputs=inp, outputs=self.backbone)
+    self.backbone_outputs = self.backbone_class(input_tensor = inp, freeze_bn = freeze_bn, lite = lite, include_top = False, no_se = no_se)
+    self.backbone = tf.keras.Model(inputs=inp, outputs=self.backbone_outputs)
     self.bifpn = BiFPN(self.bifpn_depth, self.bifpn_width, freeze_bn=freeze_bn, lite=lite)
 
     self.box_net, self.class_net, self.rotation_net, self.translation_net = build_subnets(num_classes,
@@ -60,7 +71,8 @@ class EfficientPose(tf.keras.Model):
                                                                       num_rotation_parameters,
                                                                       freeze_bn,
                                                                       num_anchors,
-                                                                      lite)
+                                                                      lite,
+                                                                      use_groupnorm)
     anchors, translation_anchors = anchors_for_shape((self.input_size, self.input_size), anchor_params = anchor_parameters)
     self.translation_anchors = tf.expand_dims(translation_anchors, 0)
     self.anchors = tf.expand_dims(anchors, 0)
@@ -80,12 +92,12 @@ class EfficientPose(tf.keras.Model):
     image_scale = camera_parameters_input[:, 5]
 
     backbone_feature_maps = self.backbone(image)
-    fpn_feature_maps = self.bifpn(backbone_feature_maps)
+    fpn_feature_maps = self.bifpn(backbone_feature_maps, training=training)
 
-    classification = self.class_net(fpn_feature_maps)
-    bbox_regression = self.box_net(fpn_feature_maps)
-    rotation = self.rotation_net(fpn_feature_maps)
-    translation_raw = self.translation_net(fpn_feature_maps)
+    classification = self.class_net(fpn_feature_maps, training=training)
+    bbox_regression = self.box_net(fpn_feature_maps, training=training)
+    rotation = self.rotation_net(fpn_feature_maps, training=training)
+    translation_raw = self.translation_net(fpn_feature_maps, training=training)
 
     translation_xy_Tz = self.regress_translation([self.translation_anchors, translation_raw])
     translation = self.calc_tx_ty(translation_xy_Tz,
@@ -99,15 +111,15 @@ class EfficientPose(tf.keras.Model):
     bboxes = self.regress_boxes(bbox_regression, self.anchors)
     transformation = self.concat_rot_trans([rotation, translation])
 
-    return classification, bbox_regression, rotation, translation, transformation, bboxes, backbone_feature_maps
+    return classification, bbox_regression, rotation, translation, transformation, bboxes, fpn_feature_maps
     #return fpn_feature_maps
 
   def get_models(self):
     image_input = layers.Input((self.input_size, self.input_size, 3))
     camera_parameters_input = layers.Input((6,))
     classification, bbox_regression, rotation, translation, transformation, bboxes, backbone_feature_maps = self([image_input, camera_parameters_input])
-    #efficientpose_tflite = models.Model(inputs = [image_input, camera_parameters_input], outputs = [bboxes, classification, rotation, translation], name = 'efficientpose_lite')
-    efficientpose_tflite = models.Model(inputs = [image_input, camera_parameters_input], outputs = backbone_feature_maps, name = 'efficientpose_lite')
+    efficientpose_tflite = models.Model(inputs = [image_input, camera_parameters_input], outputs = [bboxes, classification, rotation, translation], name = 'efficientpose_lite')
+    #efficientpose_tflite = models.Model(inputs = [image_input, camera_parameters_input], outputs = [backbone_feature_maps], name = 'efficientpose_lite')
 
     classification = tf.keras.layers.Layer(name="classification")(classification)
     bbox_regression = tf.keras.layers.Layer(name="regression")(bbox_regression)
@@ -197,14 +209,14 @@ class BiFPNLayer(tf.keras.Model):
        BiFPN layers of the different levels (P3, P4, P5, P6, P7)
     """
     self.idx_BiFPN_layer = idx_BiFPN_layer
-    self.prepare_features = PrepareFeatureMapsForBiFPN(num_channels, freeze_bn) if idx_BiFPN_layer == 0 else tf.keras.layers.Layer()
+    self.prepare_features = PrepareFeatureMapsForBiFPN(num_channels, freeze_bn) if idx_BiFPN_layer == 0 else lambda x: tf.identity(x)
     self.top_downway = TopDownPathwayBiFPN(num_channels, idx_BiFPN_layer, lite)
     self.bottom_up = BottomUpPathwayBiFPN(num_channels, idx_BiFPN_layer, lite)
 
   def call(self, features, training=False):
     if self.idx_BiFPN_layer == 0:
         _, _, C3, C4, C5 = features
-        P3_in, P4_in_1, P4_in_2, P5_in_1, P5_in_2, P6_in, P7_in = self.prepare_features([C3, C4, C5])
+        P3_in, P4_in_1, P4_in_2, P5_in_1, P5_in_2, P6_in, P7_in = self.prepare_features([C3, C4, C5], training=training)
     else:
         P3_in, P4_in, P5_in, P6_in, P7_in = features
         
@@ -243,20 +255,20 @@ class PrepareFeatureMapsForBiFPN(tf.keras.Model):
     """
     super().__init__(**kwargs)
     self.p3_conv1 = layers.Conv2D(num_channels, kernel_size = 1, padding = 'same', name = 'fpn_cells/cell_0/fnode3/resample_0_0_8/conv2d')
-    self.p3_bn1 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode3/resample_0_0_8/bn')
+    self.p3_bn1 = NormalizationLayer(name='fpn_cells/cell_0/fnode3/resample_0_0_8/bn')
 
     self.p4_conv1 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='fpn_cells/cell_0/fnode2/resample_0_1_7/conv2d')
-    self.p4_bn1 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode2/resample_0_1_7/bn')
+    self.p4_bn1 = NormalizationLayer(name='fpn_cells/cell_0/fnode2/resample_0_1_7/bn')
     self.p4_conv2 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='fpn_cells/cell_0/fnode4/resample_0_1_9/conv2d')
-    self.p4_bn2 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode4/resample_0_1_9/bn')
+    self.p4_bn2 = NormalizationLayer(name='fpn_cells/cell_0/fnode4/resample_0_1_9/bn')
     
     self.p5_conv1 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='fpn_cells/cell_0/fnode1/resample_0_2_6/conv2d')
-    self.p5_bn1 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode1/resample_0_2_6/bn')
+    self.p5_bn1 = NormalizationLayer(name='fpn_cells/cell_0/fnode1/resample_0_2_6/bn')
     self.p5_conv2 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='fpn_cells/cell_0/fnode5/resample_0_2_10/conv2d')
-    self.p5_bn2  = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='fpn_cells/cell_0/fnode5/resample_0_2_10/bn')
+    self.p5_bn2  = NormalizationLayer(name='fpn_cells/cell_0/fnode5/resample_0_2_10/bn')
     
     self.p6_conv1 = layers.Conv2D(num_channels, kernel_size=1, padding='same', name='resample_p6/conv2d')
-    self.p6_bn1 = BatchNormalization(freeze=freeze_bn, momentum=MOMENTUM, epsilon=EPSILON, name='resample_p6/bn')
+    self.p6_bn1 = NormalizationLayer(name='resample_p6/bn')
     self.p6_pool = layers.MaxPooling2D(pool_size=3, strides=2, padding='same', name='resample_p6/maxpool')
     
     self.p7_pool = layers.MaxPooling2D(pool_size=3, strides=2, padding='same', name='resample_p7/maxpool')
@@ -264,22 +276,22 @@ class PrepareFeatureMapsForBiFPN(tf.keras.Model):
     C3, C4, C5 = inputs
     P3_in = C3
     P3_in = self.p3_conv1(P3_in)
-    P3_in = self.p3_bn1(P3_in)
+    P3_in = self.p3_bn1(P3_in, training)
     
     P4_in = C4
     P4_in_1 = self.p4_conv1(P4_in)
-    P4_in_1 = self.p4_bn1(P4_in_1)
+    P4_in_1 = self.p4_bn1(P4_in_1, training)
     P4_in_2 = self.p4_conv2(P4_in)
-    P4_in_2 = self.p4_bn2(P4_in_2)
+    P4_in_2 = self.p4_bn2(P4_in_2, training)
     
     P5_in = C5
     P5_in_1 = self.p5_conv1(P5_in)
-    P5_in_1 = self.p5_bn1(P5_in_1)
+    P5_in_1 = self.p5_bn1(P5_in_1, training)
     P5_in_2 = self.p5_conv2(P5_in)
-    P5_in_2 = self.p5_bn2(P5_in_2)
+    P5_in_2 = self.p5_bn2(P5_in_2, training)
     
     P6_in = self.p6_conv1(C5)
-    P6_in = self.p6_bn1(P6_in)
+    P6_in = self.p6_bn1(P6_in, training)
     P6_in = self.p6_pool(P6_in)
     
     P7_in = self.p7_pool(P6_in)
@@ -402,20 +414,20 @@ class SingleBiFPNMergeStep(tf.keras.Model):
     x = self.feature_map_resampled(feature_map_other_level)
     x = self.merged_feature_map_add(feature_maps_current_level + [x])
     x = self.merged_feature_map_activation(x)
-    return self.merged_feature_map_conv(x)
+    return self.merged_feature_map_conv(x, training=training)
 
 
 class SeparableConvBlock(tf.keras.Model):
   def __init__(self, num_channels, kernel_size, strides, name, freeze_bn = False):
     super().__init__(name=name)
     self.f1 = layers.SeparableConv2D(num_channels, kernel_size = kernel_size, strides = strides, padding = 'same', use_bias = True, name = f'{name}/conv')
-    self.f2 = BatchNormalization(freeze = freeze_bn, momentum = MOMENTUM, epsilon = EPSILON, name = f'{name}/bn')
+    self.f2 = NormalizationLayer(name = f'{name}/bn')
   
-  def call(self, inputs, training=False):
-      return self.f2(self.f1(inputs))
+  def call(self, inputs, training):
+      return self.f2(self.f1(inputs), training=training)
 
 
-def build_subnets(num_classes, subnet_width, subnet_depth, subnet_num_iteration_steps, num_groups_gn, num_rotation_parameters, freeze_bn, num_anchors, lite):
+def build_subnets(num_classes, subnet_width, subnet_depth, subnet_num_iteration_steps, num_groups_gn, num_rotation_parameters, freeze_bn, num_anchors, lite, use_groupnorm):
     """
     Builds the EfficientPose subnetworks
     Args:
@@ -452,7 +464,7 @@ def build_subnets(num_classes, subnet_width, subnet_depth, subnet_num_iteration_
                                 num_iteration_steps = subnet_num_iteration_steps,
                                 num_anchors = num_anchors,
                                 freeze_bn = freeze_bn,
-                                use_group_norm = FLAGS.use_groupnorm,
+                                use_group_norm = use_groupnorm,
                                 num_groups_gn = num_groups_gn,
                                 name = 'rotation_net', 
                                 lite = lite)
@@ -462,7 +474,7 @@ def build_subnets(num_classes, subnet_width, subnet_depth, subnet_num_iteration_
                                 num_iteration_steps = subnet_num_iteration_steps,
                                 num_anchors = num_anchors,
                                 freeze_bn = freeze_bn,
-                                use_group_norm = FLAGS.use_groupnorm,
+                                use_group_norm = use_groupnorm,
                                 num_groups_gn = num_groups_gn,
                                 name = 'translation_net',
                                 lite = lite)
@@ -526,7 +538,7 @@ class BoxNet(layers.Layer):
         self.convs = [layers.SeparableConv2D(filters = self.width, name = f'{self.name}/box-{i}', **options) for i in range(self.depth)]
         self.head = layers.SeparableConv2D(filters = self.num_anchors * self.num_values, name = f'{self.name}/box-predict', **options)
         
-        self.bns = [[BatchNormalization(freeze = freeze_bn, momentum = MOMENTUM, epsilon = EPSILON, name = f'{self.name}/box-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)]
+        self.bns = [[NormalizationLayer(name = f'{self.name}/box-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)]
         if lite:
             self.activation = layers.Lambda(lambda x: tf.nn.relu6(x))
         else:
@@ -536,11 +548,11 @@ class BoxNet(layers.Layer):
         self.level = 0
         self.final_concat = layers.Concatenate(1, name="regression")
 
-    def call(self, features, **kwargs):
+    def call(self, features, training, **kwargs):
       def _apply_on_feature(feature, level):
         for i in range(self.depth):
             feature = self.convs[i](feature)
-            feature = self.bns[i][level](feature)
+            feature = self.bns[i][level](feature, training=training)
             feature = self.activation(feature)
         outputs = self.head(feature)
         outputs = self.reshapes[level](outputs)
@@ -571,21 +583,21 @@ class ClassNet(tf.keras.Model):
         self.convs = [layers.SeparableConv2D(filters = self.width, bias_initializer = 'zeros', name = f'{self.name}/class-{i}', **options) for i in range(self.depth)]
         self.head = layers.SeparableConv2D(filters = self.num_classes * self.num_anchors, bias_initializer = PriorProbability(probability = 0.01), name = f'{self.name}/class-predict', **options)
 
-        self.bns = [[BatchNormalization(freeze = freeze_bn, momentum = MOMENTUM, epsilon = EPSILON, name = f'{self.name}/class-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)]
+        self.bns = [[NormalizationLayer(name = f'{self.name}/class-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)]
         if lite:
             self.activation = layers.Lambda(lambda x: tf.nn.relu6(x))
         else:
             self.activation = layers.Lambda(lambda x: tf.nn.swish(x))
         #self.reshape = layers.Reshape((-1, self.num_classes))
         self.reshapes = [StaticReshape(self.num_classes, name=f"classnet_reshape_{i+1}") for i in range(5)]
-        self.activation_sigmoid = layers.Activation('sigmoid') # if not lite else layers.Lambda(lambda x: tf.nn.relu6(x))
+        self.activation_sigmoid = layers.Activation('sigmoid') 
         self.level = 0
         self.final_concat = layers.Concatenate(axis=1, name="classification")
-    def call(self, features, **kwargs):
+    def call(self, features, training, **kwargs):
         def _compute_for_feature(feature, level):
           for i in range(self.depth):
               feature = self.convs[i](feature)
-              feature = self.bns[i][level](feature)
+              feature = self.bns[i][level](feature, training=training)
               feature = self.activation(feature)
           outputs = self.head(feature)
           outputs = self.reshapes[level](outputs)
@@ -631,18 +643,18 @@ class IterativeRotationSubNet(tf.keras.Model):
         if self.use_group_norm:
             self.norm_layer = [[[GroupNormalization(groups = self.num_groups_gn, axis = gn_channel_axis, name = f'{self.name}/iterative-rotation-sub-{k}-{i}-gn-{j}') for j in range(3, 8)] for i in range(self.depth)] for k in range(self.num_iteration_steps)]
         else: 
-            self.norm_layer = [[[BatchNormalization(freeze = freeze_bn, momentum = MOMENTUM, epsilon = EPSILON, name = f'{self.name}/iterative-rotation-sub-{k}-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)] for k in range(self.num_iteration_steps)]
+            self.norm_layer = [[[NormalizationLayer(name = f'{self.name}/iterative-rotation-sub-{k}-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)] for k in range(self.num_iteration_steps)]
 
         if lite: 
             self.activation = layers.Lambda(lambda x: tf.nn.relu6(x))
         else: 
             self.activation = layers.Lambda(lambda x: tf.nn.swish(x))
 
-    def call(self, feature, level_py, **kwargs):
+    def call(self, feature, level_py, training, **kwargs):
         iter_step_py = kwargs["iter_step_py"]
         for i in range(self.depth):
             feature = self.convs[i](feature)
-            feature = self.norm_layer[iter_step_py][i][level_py](feature)
+            feature = self.norm_layer[iter_step_py][i][level_py](feature, training=training)
             feature = self.activation(feature)
         outputs = self.head(feature)
         
@@ -687,7 +699,7 @@ class RotationNet(tf.keras.Model):
         if self.use_group_norm:
             self.norm_layer = [[GroupNormalization(groups = self.num_groups_gn, axis = gn_channel_axis, name = f'{self.name}/rotation-{i}-gn-{j}') for j in range(3, 8)] for i in range(self.depth)]
         else: 
-            self.norm_layer = [[BatchNormalization(freeze = freeze_bn, momentum = MOMENTUM, epsilon = EPSILON, name = f'{self.name}/rotation-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)]
+            self.norm_layer = [[NormalizationLayer(name = f'{self.name}/rotation-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)]
         
         self.iterative_submodel = IterativeRotationSubNet(width = self.width,
                                                           depth = self.depth - 1,
@@ -710,18 +722,18 @@ class RotationNet(tf.keras.Model):
         self.concat = layers.Concatenate(axis = channel_axis)
         self.final_concat = layers.Concatenate(1, name="rotation")
 
-    def call(self, features, **kwargs):
+    def call(self, features, training, **kwargs):
         def _apply_on_feature(feature, level):
           for i in range(self.depth):
               feature = self.convs[i](feature)
-              feature = self.norm_layer[i][level](feature)
+              feature = self.norm_layer[i][level](feature, training=training)
               feature = self.activation(feature)
               
           rotation = self.initial_rotation(feature)
           
           for i in range(self.num_iteration_steps):
               iterative_input = self.concat([feature, rotation])
-              delta_rotation = self.iterative_submodel(iterative_input, level, iter_step_py = i)
+              delta_rotation = self.iterative_submodel(iterative_input, level, training=training, iter_step_py = i)
               rotation = self.add([rotation, delta_rotation])   
           return self.reshapes[level](rotation)
 
@@ -764,7 +776,7 @@ class IterativeTranslationSubNet(tf.keras.Model):
         if self.use_group_norm:
             self.norm_layer = [[[GroupNormalization(groups = self.num_groups_gn, axis = gn_channel_axis, name = f'{self.name}/iterative-translation-sub-{k}-{i}-gn-{j}') for j in range(3, 8)] for i in range(self.depth)] for k in range(self.num_iteration_steps)]
         else: 
-            self.norm_layer = [[[BatchNormalization(freeze = freeze_bn, momentum = MOMENTUM, epsilon = EPSILON, name = f'{self.name}/iterative-translation-sub-{k}-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)] for k in range(self.num_iteration_steps)]
+            self.norm_layer = [[[NormalizationLayer(name = f'{self.name}/iterative-translation-sub-{k}-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)] for k in range(self.num_iteration_steps)]
 
         if lite:
             self.activation = layers.Lambda(lambda x: tf.nn.relu6(x))
@@ -772,12 +784,12 @@ class IterativeTranslationSubNet(tf.keras.Model):
             self.activation = layers.Lambda(lambda x: tf.nn.swish(x))
 
 
-    def call(self, feature, level, **kwargs):
+    def call(self, feature, level, training, **kwargs):
         #level_py = kwargs["level_py"]
         iter_step_py = kwargs["iter_step_py"]
         for i in range(self.depth):
             feature = self.convs[i](feature)
-            feature = self.norm_layer[iter_step_py][i][level](feature)
+            feature = self.norm_layer[iter_step_py][i][level](feature, training=training)
             feature = self.activation(feature)
         outputs_xy = self.head_xy(feature)
         outputs_z = self.head_z(feature)
@@ -824,7 +836,7 @@ class TranslationNet(tf.keras.Model):
         if self.use_group_norm:
             self.norm_layer = [[GroupNormalization(groups = self.num_groups_gn, axis = gn_channel_axis, name = f'{self.name}/translation-{i}-gn-{j}') for j in range(3, 8)] for i in range(self.depth)]
         else: 
-            self.norm_layer = [[layers.BatchNormalization(momentum = MOMENTUM, epsilon = EPSILON, name = f'{self.name}/translation-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)]
+            self.norm_layer = [[NormalizationLayer(name = f'{self.name}/translation-{i}-bn-{j}') for j in range(3, 8)] for i in range(self.depth)]
         
         self.iterative_submodel = IterativeTranslationSubNet(width = self.width,
                                                              depth = self.depth - 1,
@@ -849,11 +861,11 @@ class TranslationNet(tf.keras.Model):
             
         self.concat_output = layers.Concatenate(axis = -1) #always last axis after reshape
         self.final_concat = layers.Concatenate(axis=1, name="translation_raw_outputs")
-    def call(self, features, **kwargs):
+    def call(self, features, training, **kwargs):
         def _apply_on_feature(feature, level):
           for i in range(self.depth):
               feature = self.convs[i](feature)
-              feature = self.norm_layer[i][level](feature)
+              feature = self.norm_layer[i][level](feature, training=training)
               feature = self.activation(feature)
               
           translation_xy = self.initial_translation_xy(feature)
@@ -861,7 +873,7 @@ class TranslationNet(tf.keras.Model):
           
           for i in range(self.num_iteration_steps):
               iterative_input = self.concat([feature, translation_xy, translation_z])
-              delta_translation_xy, delta_translation_z = self.iterative_submodel(iterative_input, level, iter_step_py = i)
+              delta_translation_xy, delta_translation_z = self.iterative_submodel(iterative_input, level, training=training, iter_step_py = i)
               translation_xy = self.add([translation_xy, delta_translation_xy])
               translation_z = self.add([translation_z, delta_translation_z])
           
@@ -881,66 +893,6 @@ class StaticExpandDims(tf.keras.layers.Layer):
     
     def call(self, inputs, **kwargs):
         return tf.reshape(inputs, self.static_output_shape)
-
-
-def apply_subnets_to_feature_maps(box_net, class_net, rotation_net, translation_net, fpn_feature_maps, image_input_shape, input_size, anchor_parameters, fx, fy, px, py, tz_scale, image_scale, for_converter):
-    """
-    Applies the subnetworks to the BiFPN feature maps
-    Args:
-        box_net, class_net, rotation_net, translation_net: Subnetworks
-        fpn_feature_maps: Sequence of the BiFPN feature maps of the different levels (P3, P4, P5, P6, P7)
-        image_input, camera_parameters_input: The image and camera parameter input layer
-        input size: Integer representing the input image resolution
-        anchor_parameters: Struct containing anchor parameters. If None, default values are used.
-    
-    Returns:
-       classification: Tensor containing the classification outputs for all anchor boxes. Shape (batch_size, num_anchor_boxes, num_classes)
-       bbox_regression: Tensor containing the deltas of anchor boxes to the GT 2D bounding boxes for all anchor boxes. Shape (batch_size, num_anchor_boxes, 4)
-       rotation: Tensor containing the rotation outputs for all anchor boxes. Shape (batch_size, num_anchor_boxes, num_rotation_parameters)
-       translation: Tensor containing the translation outputs for all anchor boxes. Shape (batch_size, num_anchor_boxes, 3)
-       transformation: Tensor containing the concatenated rotation and translation outputs for all anchor boxes. Shape (batch_size, num_anchor_boxes, num_rotation_parameters + 3)
-                       Rotation and Translation are concatenated because the Keras Loss function takes only one GT and prediction tensor respectively as input but the transformation loss needs both
-       bboxes: Tensor containing the 2D bounding boxes for all anchor boxes. Shape (batch_size, num_anchor_boxes, 4)
-    """
-    classification = [class_net(feature, i) for i, feature in enumerate(fpn_feature_maps)]
-    classification = layers.Concatenate(axis=1, name='classification')(classification)
-    
-    bbox_regression = [box_net(feature, i) for i, feature in enumerate(fpn_feature_maps)]
-    bbox_regression = layers.Concatenate(axis=1, name='regression')(bbox_regression)
-    
-    rotation = [rotation_net(feature, i) for i, feature in enumerate(fpn_feature_maps)]
-    rotation = layers.Concatenate(axis = 1, name='rotation')(rotation)
-    
-    translation_raw = [translation_net(feature, i) for i, feature in enumerate(fpn_feature_maps)]
-    translation_raw = layers.Concatenate(axis = 1, name='translation_raw_outputs')(translation_raw)
-    
-    #get anchors and apply predicted translation offsets to translation anchors
-    anchors, translation_anchors = anchors_for_shape((input_size, input_size), anchor_params = anchor_parameters)
-    translation_anchors_input = np.expand_dims(translation_anchors, axis = 0)
-    
-    translation_xy_Tz = RegressTranslation(name = 'translation_regression')([translation_anchors_input, translation_raw])
-    translation = CalculateTxTy(name = 'translation')(translation_xy_Tz,
-                                                        fx = fx,
-                                                        fy = fy,
-                                                        px = px,
-                                                        py = py,
-                                                        tz_scale = tz_scale,
-                                                        image_scale = image_scale,
-                                                        for_converter = for_converter)
-    
-    # apply predicted 2D bbox regression to anchors
-    anchors_input = np.expand_dims(anchors, axis = 0)
-    #bboxes = bbox_regression
-    #bboxes = bbox_regression[..., :4]
-    bboxes = RegressBoxes(name='boxes')(bbox_regression, anchors_input)
-    #bboxes = ClipBoxes(name='clipped_boxes')(bboxes, image_input_shape[0], image_input_shape[1])
-    
-    #concat rotation and translation outputs to transformation output to have a single output for transformation loss calculation
-    #standard concatenate layer throws error that shapes does not match because translation shape dim 2 is known via translation_anchors and rotation shape dim 2 is None
-    #so just use lambda layer with tf concat
-    transformation = layers.Lambda(lambda input_list: tf.concat(input_list, axis = -1), name="transformation")([rotation, translation])
-
-    return classification, bbox_regression, rotation, translation, transformation, bboxes
     
 
 def print_models(*models):

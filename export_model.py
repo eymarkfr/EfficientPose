@@ -49,24 +49,24 @@ def convert(args):
                                                   score_threshold = args.score_threshold,
                                                   num_rotation_parameters = rot_parameters[args.rotation_representation],
                                                   lite = args.lite,
-                                                  no_se=args.no_se) 
+                                                  no_se=args.no_se,
+                                                  use_groupnorm=args.use_groupnorm) 
 
-  prediction_model, pred_model, tflite_raw_model = model.get_models()
-  tflite_raw_model([tf.random.normal((1,512,512,3)), tf.random.normal((1,6))])
-  prediction_model([tf.random.normal((1,512,512,3)), tf.random.normal((1,6))])
-  pred_model([tf.random.normal((1,512,512,3)), tf.random.normal((1,6))])
-  inp = tf.keras.layers.Input((512,512,3), dtype=tf.uint8)
-  inp2 = tf.keras.layers.Input((6,))
+  _, _, tflite_model = model.get_models()
+  tflite_model([tf.random.normal((1,512,512,3)), tf.random.normal((1,6))])
+  #   inp = tf.keras.layers.Input((512,512,3), dtype=tf.uint8)
+  #   inp2 = tf.keras.layers.Input((6,))
 
-  tflite_raw_model = tfkeras.EfficientNetB0(input_tensor=preprocess_image(inp))
-  tflite_raw_model = tf.keras.Model(inputs=[inp, inp2], outputs=tflite_raw_model)
-  weight_loader.load_weights_rec(tflite_raw_model, args.weights)
+  #   tflite_raw_model = tfkeras.EfficientNetB0(input_tensor=preprocess_image(inp))
+  #   tflite_raw_model = tf.keras.Model(inputs=[inp, inp2], outputs=tflite_raw_model)
+  weight_loader.load_weights_rec(tflite_model, args.weights)
+
   if args.freeze_bn:
-    weight_loader.freeze_bn(tflite_raw_model)
+    weight_loader.freeze_bn(tflite_model)
 
   if args.q_aware:
     gen, val = create_generators(args)
-    q_aware_model = tfmot.quantization.keras.quantize_model(tflite_raw_model)
+    q_aware_model = tfmot.quantization.keras.quantize_model(tflite_model)
     q_aware_model.compile(optimizer="adam", 
                   loss={'regression': smooth_l1(),
                         'classification': focal(),
@@ -85,8 +85,8 @@ def convert(args):
     )
 
   #tflite_raw_model.save("models/model.h5")
-  tflite_raw_model([tf.random.normal((1,512,512,3)), tf.random.normal((1,6))])
-  converter = tf.lite.TFLiteConverter.from_keras_model(tflite_raw_model)
+  tflite_model([tf.random.normal((1,512,512,3)), tf.random.normal((1,6))])
+  converter = tf.lite.TFLiteConverter.from_keras_model(tflite_model)
   converter.experimental_new_converter = True
   converter.target_spec.supported_ops = [
     tf.lite.OpsSet.TFLITE_BUILTINS, # enable TensorFlow Lite ops.

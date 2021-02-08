@@ -21,6 +21,18 @@ def get_all_layers(entry, depth=0, max_depth=5):
             layers += get_all_layers(l, depth+1, max_depth)
     return list(set(layers))
 
+def list_unbuilt_layers(entry, depth=0, max_depth=10):
+    if hasattr(entry, 'built'):
+        if(not entry.built):
+            print("not built", entry, entry.name)
+    if max_depth == depth:
+        print("Max depth reached")
+        return 
+
+    if hasattr(entry, "layers"):
+        for l in entry.layers:
+            list_unbuilt_layers(l, depth+1, max_depth)
+
 def freeze_bn(entry, depth=0, max_depth=5):
     if type(entry) == tf.keras.layers.BatchNormalization:
         print("Freezin bn", entry.name)
