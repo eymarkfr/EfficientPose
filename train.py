@@ -328,6 +328,7 @@ def create_generators(args):
             rotation_representation = args.rotation_representation,
             use_colorspace_augmentation = args.color_augmentation,
             use_6DoF_augmentation = args.use_6dof_augmentation,
+            choose_n=args.choose_n,
             **common_args
         )
 

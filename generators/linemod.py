@@ -37,6 +37,7 @@ from absl import flags
 flags.DEFINE_string("linemod_path", "/mnt/data/datasets/Linemod_preprocessed", "Path to dataset directory")
 flags.DEFINE_integer("object_id", 8, 'ID of the Linemod Object to train on')
 flags.DEFINE_string("image_extension", ".png", "Which image extension to use")
+flags.DEFINE_integer("choose_n", None, "If set only a subset of training images will be used")
 
 
 
@@ -52,6 +53,7 @@ class LineModGenerator(Generator):
                  image_extension = None,
                  shuffle_dataset = True,
                   symmetric_objects = {"glue", 11, "eggbox", 10}, #set with names and indices of symmetric objects
+                 choose_n = None,
                  **kwargs):
         """
         Initializes a Linemod generator
@@ -102,7 +104,7 @@ class LineModGenerator(Generator):
         else:
             self.data_file = os.path.join(self.object_path, "test.txt")
             
-        self.data_examples = self.parse_examples(data_file = self.data_file)
+        self.data_examples = self.parse_examples(data_file = self.data_file, choose_n=choose_n)
         
         #parse yaml files with ground truth annotations and infos about camera intrinsics and 3D BBox
         self.gt_dict = self.parse_yaml(self.object_path)
@@ -500,7 +502,7 @@ class LineModGenerator(Generator):
             return True
         
         
-    def parse_examples(self, data_file):
+    def parse_examples(self, data_file, choose_n=None):
         """
        Reads the Linemod dataset split (train or test) txt file containing the examples of this split
         Args:
@@ -515,6 +517,10 @@ class LineModGenerator(Generator):
         
         with open(data_file) as fid:
             data_examples = [example.strip() for example in fid if example != ""]
+        
+        if choose_n is not None:
+            random.shuffle(data_examples)
+            data_examples = data_examples[:choose_n]
             
         return data_examples
         
