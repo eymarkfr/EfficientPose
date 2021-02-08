@@ -300,7 +300,7 @@ def create_callbacks(training_model, prediction_model, validation_generator, arg
     #     min_lr     = 1e-7
     # ))
     def lr_schedule(epoch, lr): 
-        return lr*0.96
+        return lr*0.92
     learning_rate_cb = tf.keras.callbacks.LearningRateScheduler(lr_schedule)
     callbacks.append(learning_rate_cb)
     return callbacks
