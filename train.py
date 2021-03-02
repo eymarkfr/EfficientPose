@@ -161,7 +161,7 @@ def train(args):
                                                               num_rotation_parameter = num_rotation_parameters)},
                   loss_weights = {'regression' : 1.0,
                                   'classification': 1.0,
-                                  'transformation': 0.02})
+                                  'transformation': 0.2})
 
     # create the callbacks
     callbacks = create_callbacks(
